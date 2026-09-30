@@ -1,0 +1,3184 @@
+/* ============================================
+   D&D Character Sheet Style - Dark Card Theme
+   Applies only to notes with: cssclasses containing "dnd-sheet"
+   ============================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Bitter:wght@600;700&family=Inter:wght@400;500;600&display=swap');
+
+.dnd-sheet {
+  --dnd-bg: #14161d;
+  --dnd-card: #23262f;
+  --dnd-border: #2a2e3a;
+  --dnd-text: #d7d9e0;
+  --dnd-dim: #8b8f9c;
+  --dnd-accent: #c05a4a;
+}
+
+/* Page background */
+.dnd-sheet .markdown-preview-view,
+.dnd-sheet .markdown-source-view .cm-scroller {
+  background: var(--dnd-bg);
+  color: var(--dnd-text);
+  font-family: 'Inter', sans-serif;
+  font-size: 15px;
+  padding: 26px 34px;
+}
+
+.dnd-sheet h1 {
+  font-family: 'Bitter', serif;
+  color: var(--dnd-accent);
+  font-size: 2em;
+  margin-bottom: 0;
+}
+
+.dnd-sheet h2 {
+  font-family: 'Bitter', serif;
+  color: var(--dnd-accent);
+  font-size: 1.2em;
+  border-bottom: 2px solid var(--dnd-border);
+  padding-bottom: 6px;
+  margin-top: 1.6em;
+}
+
+.dnd-sheet h3 {
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dnd-dim);
+  margin-top: 1.4em;
+  margin-bottom: 6px;
+}
+
+/* ===== Base callout = one "card" ===== */
+.dnd-sheet .callout {
+  background: var(--dnd-card);
+  border: 1px solid var(--dnd-border);
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin: 14px 0;
+}
+
+.dnd-sheet .callout-icon,
+.dnd-sheet .callout-fold {
+  display: none;
+}
+
+.dnd-sheet .callout-title-inner {
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 1.17em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dnd-dim);
+}
+
+.dnd-sheet .callout-content {
+  color: var(--dnd-text);
+  margin-top: 8px;
+  overflow: auto; /* let content clear any floated image inside */
+}
+
+.dnd-sheet .callout-content > *:first-child {
+  margin-top: 0;
+}
+
+/* ===== [!row] = invisible layout wrapper, lines up nested
+   callouts side by side ===== */
+.dnd-sheet .callout[data-callout="row"] {
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 14px 0;
+  overflow: visible;
+}
+.dnd-sheet .callout[data-callout="row"] > .callout-title {
+  display: none;
+}
+.dnd-sheet .callout[data-callout="row"] > .callout-content {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 14px;
+  margin-top: 0;
+  overflow: visible;
+}
+.dnd-sheet .callout[data-callout="row"] > .callout-content > .callout {
+  flex: 1;
+  min-width: 130px;
+  margin: 0 !important;
+}
+
+/* Make the Overview/Combat Values/Hit Points row's boxes equal height
+   (stretch to match the tallest), instead of each sizing to its own
+   content. Scoped specifically to the row containing "charinfo" so this
+   doesn't affect other [!row] instances elsewhere in the sheet, like
+   Skills/Saves, which intentionally keep flex-start. */
+.dnd-sheet .callout[data-callout="row"]:has(> .callout-content > .callout[data-callout="charinfo"]) > .callout-content {
+  align-items: stretch;
+}
+
+/* Same treatment for the Defenses/Conditions row - equal height, scoped
+   to just this row via its "defenses" child so Skills/Saves is untouched. */
+.dnd-sheet .callout[data-callout="row"]:has(> .callout-content > .callout[data-callout="defenses"]) > .callout-content {
+  align-items: stretch;
+}
+
+/* ===== [!colstack] = invisible wrapper that stacks its nested
+   callouts vertically - used to put Senses under Saving Throws
+   while still counting as ONE column in the row ===== */
+.dnd-sheet .callout[data-callout="colstack"] {
+  background: transparent;
+  border: none;
+  padding: 0;
+  overflow: visible;
+}
+.dnd-sheet .callout[data-callout="colstack"] > .callout-title {
+  display: none;
+}
+.dnd-sheet .callout[data-callout="colstack"] > .callout-content {
+  margin-top: 0 !important;
+  padding: 0 !important;
+  overflow: visible;
+}
+.dnd-sheet .callout[data-callout="colstack"] > .callout-content > .callout {
+  margin: 0 0 14px 0 !important;
+}
+.dnd-sheet .callout[data-callout="colstack"] > .callout-content > .callout:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* ===== Row 1 sizing: wide Overview card, smaller Combat/HP cards ===== */
+.dnd-sheet .callout[data-callout="row"] > .callout-content > .callout[data-callout="charinfo"] {
+  flex: 3;
+  min-width: 320px;
+}
+.dnd-sheet .callout[data-callout="row"] > .callout-content > .callout[data-callout="combat"] {
+  flex: 1;
+  min-width: 130px;
+}
+.dnd-sheet .callout[data-callout="row"] > .callout-content > .callout[data-callout="hp"] {
+  flex: 1;
+  min-width: 150px;
+  text-align: center;
+}
+
+/* Overview: explicit two-column layout - text+buttons on the left,
+   portrait on the right. Previously used float, which relied on the
+   image's DOM wrapper letting following text wrap around it; once the
+   portrait became a DataviewJS-rendered <img> (needed to swap images
+   dynamically), that wrapping broke, so this is now explicit instead
+   of relying on float behavior across block boundaries. */
+.dnd-sheet .overview-flex-row {
+  display: flex;
+  gap: 16px;
+  /* stretch (not flex-start) so both columns share one height, driven by
+     the taller side (the portrait) - the left column then has slack below
+     its text to vertically center the button row in, and the portrait can
+     fill that same height edge-to-edge instead of floating at its own
+     natural size. */
+  align-items: stretch;
+}
+.dnd-sheet .overview-left-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Each Race/Class/Subclass/... line is its own block so we can pin its
+   spacing directly - !important because the vault's enabled theme/snippet
+   CSS (not this plugin's) otherwise imposes prose-sized line spacing here,
+   leaving a full text-line gap between every field. */
+.dnd-sheet .overview-info-line {
+  margin: 0 0 12px 0 !important;
+  line-height: 1.4 !important;
+}
+.dnd-sheet .overview-info-line:last-of-type {
+  margin-bottom: 0 !important;
+}
+/* Push the button row into the middle of whatever vertical space is left
+   under the text, instead of sitting flush beneath the last line or being
+   pinned to the very bottom - !important to beat .hp-extra-row's own
+   margin-top, declared earlier in this file. */
+.dnd-sheet .overview-btn-row {
+  margin-top: auto !important;
+  margin-bottom: auto !important;
+}
+.dnd-sheet .overview-right-col {
+  flex: 0 0 250px;
+}
+.dnd-sheet .overview-right-col img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
+}
+
+/* ===== Ability score mini-boxes ===== */
+.dnd-sheet .callout[data-callout="stat"] {
+  text-align: center;
+}
+.dnd-sheet .callout[data-callout="stat"] .callout-title-inner {
+  text-align: center;
+  width: 100%;
+  font-size: 1.56em;
+}
+.dnd-sheet .callout[data-callout="stat"] .callout-title {
+  justify-content: center;
+}
+.dnd-sheet .callout[data-callout="stat"] .callout-content p {
+  margin: 2px 0;
+}
+.dnd-sheet .stat-mod {
+  display: block;
+  font-size: 2.3em;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--dnd-text);
+}
+.dnd-sheet .profbonus-value {
+  display: block;
+  text-align: center;
+  font-size: 1.8em;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--dnd-text);
+}
+.dnd-sheet .stat-score {
+  display: block;
+  font-size: 1em;
+  color: var(--dnd-text);
+}
+
+/* Same generic 20px top padding issue as ministat/colstack, applying here
+   too - fixing consistently across all 5 boxes in this row so none is
+   left misaligned relative to the others. */
+.dnd-sheet .callout[data-callout="saves"] > .callout-content,
+.dnd-sheet .callout[data-callout="senses"] > .callout-content,
+.dnd-sheet .callout[data-callout="skills"] > .callout-content,
+.dnd-sheet .callout[data-callout="details"] > .callout-content {
+  margin-top: 0 !important;
+  padding: 0 12px 4px !important;
+}
+
+/* ===== Borderless "list" tables: saves / skills / senses -
+   no grid lines, no header row, just rows of text ===== */
+.dnd-sheet .callout[data-callout="saves"] table thead,
+.dnd-sheet .callout[data-callout="skills"] table thead,
+.dnd-sheet .callout[data-callout="senses"] table thead {
+  display: none;
+}
+.dnd-sheet .callout[data-callout="saves"] table td,
+.dnd-sheet .callout[data-callout="skills"] table td,
+.dnd-sheet .callout[data-callout="senses"] table td {
+  border: none;
+  padding: 3px 4px;
+}
+
+/* ===== Skills column: narrowed 10% from its default flex:1 share ===== */
+.dnd-sheet .callout[data-callout="row"] > .callout-content > .callout[data-callout="skills"] {
+  flex: 0.9;
+}
+
+/* ===== The wide right-hand panel (Character Details / tabs) - widened
+   10% from its previous flex:2 share ===== */
+.dnd-sheet .callout[data-callout="row"] > .callout-content > .callout[data-callout="details"] {
+  flex: 2.2;
+  min-width: 280px;
+}
+/* Actions/Spells/Inventory/Features/Notes tab-switch buttons (the
+   `BUTTON[tab-actions-btn, ...]` group in each character's main note,
+   rendered by the Meta Bind community plugin) - 2026-09-23, centered per
+   the user's own request; they sat flush against the panel's left edge
+   before. Targeted by ":has(button)" rather than any Meta Bind-specific
+   class name (unknown/unstable from this plugin's own code, since Meta
+   Bind renders them, not this one) - a plain `text-align: center` centers
+   a row of inline-block buttons in whichever block-level element Markdown
+   wrapped that BUTTON[...] line in. This never touches this plugin's own
+   JS-created buttons elsewhere (Add Inventory/Edit/etc.), since those are
+   built as <div>/<button> elements directly, never inside a rendered <p>. */
+.dnd-sheet .callout[data-callout="details"] > .callout-content p:has(button) {
+  text-align: center;
+}
+.dnd-sheet .spells-panel table {
+  overflow-x: auto;
+  display: block;
+  max-width: 100%;
+}
+
+/* Tab panels: hidden by default, shown only when the note's
+   cssclasses includes the matching tab-* class */
+.dnd-sheet .tab-panel {
+  display: none;
+  margin-top: 10px;
+}
+.dnd-sheet.tab-actions .actions-panel { display: block; }
+.dnd-sheet.tab-spells .spells-panel { display: block; }
+.dnd-sheet.tab-inventory .inventory-panel { display: block; }
+.dnd-sheet.tab-features .features-panel { display: block; }
+.dnd-sheet.tab-notes .notes-panel { display: block; }
+.dnd-sheet.tab-background .background-panel { display: block; }
+.dnd-sheet.tab-creatures .creatures-panel { display: block; }
+
+/* "Training" tab (2026-09-24, reordered 2026-09-25 to sit before Background/
+   Notes/Creatures in the same button row instead of a separate second row -
+   see the dnd-sheet-tag-training-btn markdown post-processor in main.js,
+   which is what gives this one button in the group a class to hide by,
+   since Meta Bind's BUTTON[...] group gives every button the same generic
+   classes with no per-button id to select on) - the Armor/Weapons/Tools/
+   Languages breakdown lives here instead of the compact Proficiency Bonus
+   stat card, desktop only. Below the 700px phone breakpoint the Training
+   button is hidden (the other 7 in the row are untouched) and the
+   .training-panel stays hidden regardless (the tab-training cssclass is
+   never one of MOBILE_NAV_PAGES' "tab" targets, so mobile can't reach it
+   even if the class were somehow left set from a desktop session) - the
+   Proficiencies mobile page keeps showing the number and breakdown
+   together in the [!profbonus] callout exactly as it already does. */
+.dnd-sheet.tab-training .training-panel {
+  display: none;
+}
+@media (min-width: 701px) {
+  .dnd-sheet.tab-training .training-panel {
+    display: block;
+  }
+  /* Desktop only: hide the categorized breakdown inside the compact
+     Proficiency Bonus stat card now that it has its own tab - see
+     ProfBonusTracker's .profbonus-breakdown wrapper in main.js. */
+  .dnd-sheet .callout[data-callout="profbonus"] .profbonus-breakdown {
+    display: none;
+  }
+}
+@media (max-width: 700px) {
+  .dnd-sheet .callout[data-callout="details"] button.dnd-sheet-tag-training-btn {
+    display: none;
+  }
+}
+
+/* ===== Background tab (2026-09-25) - mirrors D&D Beyond's own Background
+   tab: a Feature name/description, a Characteristics grid, and the four
+   Personality Traits/Ideals/Bonds/Flaws blocks plus Appearance. Shares
+   .background-block-textarea with the Notes tab's own Backstory field
+   below, since both are the same "full-width freeform paragraph" shape. ===== */
+.dnd-sheet .background-characteristics-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 16px;
+  margin-bottom: 10px;
+}
+.dnd-sheet .background-grid-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--dnd-border);
+  padding: 3px 0;
+}
+.dnd-sheet .background-grid-label {
+  font-weight: 600;
+  color: var(--dnd-dim);
+  font-size: 0.85em;
+  flex: 0 0 auto;
+}
+.dnd-sheet .background-grid-input {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  background: transparent;
+  border: none;
+  color: var(--dnd-text);
+  font-family: inherit;
+  font-size: 0.9em;
+}
+.dnd-sheet .background-grid-input:focus {
+  outline: none;
+  background: var(--background-modifier-form-field, #0d0e12);
+  border-radius: 4px;
+}
+.dnd-sheet .background-grid-readonly {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  color: var(--dnd-text);
+  font-size: 0.9em;
+}
+.dnd-sheet .background-feature-textarea,
+.dnd-sheet .background-block-textarea {
+  display: block !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-height: 70px;
+  box-sizing: border-box !important;
+  background: var(--background-modifier-form-field, #0d0e12);
+  border: 1px solid var(--background-modifier-border, #2a2e3a);
+  border-radius: 6px;
+  color: var(--dnd-text);
+  font-family: inherit;
+  font-size: 0.9em;
+  line-height: 1.5;
+  padding: 8px 10px;
+  resize: vertical;
+  margin: 0 0 10px 0;
+}
+
+/* ===== Shared linked-note list (Notes tab's Organizations/Allies/
+   Enemies/Other, and the Creatures tab) - a rendered list of the current
+   entries, each with a remove (✕) button, above the "+Add" datalist
+   form. See renderLinkedNoteList in main.js. ===== */
+.dnd-sheet .linked-note-list {
+  margin-bottom: 6px;
+}
+.dnd-sheet .linked-note-empty {
+  color: var(--dnd-dim);
+  font-size: 0.85em;
+  font-style: italic;
+  padding: 4px 0;
+}
+.dnd-sheet .linked-note-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--dnd-border);
+  padding: 5px 2px;
+}
+.dnd-sheet .linked-note-name {
+  flex: 1;
+  min-width: 0;
+}
+.dnd-sheet .linked-note-thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+.dnd-sheet .linked-note-remove {
+  flex: 0 0 auto;
+}
+.dnd-sheet .linked-note-add-form {
+  margin-bottom: 14px;
+}
+.dnd-sheet .linked-note-image-input {
+  max-width: 150px;
+  font-size: 0.8em;
+}
+
+/* Generic tables elsewhere (Actions, Spells dataview result, etc.)
+   keep the normal bordered grid look */
+.dnd-sheet table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.4em 0;
+}
+.dnd-sheet th {
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  font-size: 0.72em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dnd-dim);
+  border-bottom: 1px solid var(--dnd-border);
+  padding: 5px 6px;
+  text-align: left;
+}
+.dnd-sheet td {
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--dnd-border);
+  font-size: 0.92em;
+}
+.dnd-sheet strong {
+  color: var(--dnd-text);
+  font-weight: 700;
+}
+
+.dnd-sheet .dataview.table-view-table {
+  background: transparent;
+}
+.dnd-sheet .dataview.table-view-table th {
+  color: var(--dnd-dim);
+}
+.dnd-sheet .dataview.table-view-table a {
+  color: var(--dnd-accent);
+}
+
+.dnd-sheet hr {
+  border: none;
+  border-top: 1px solid var(--dnd-border);
+  margin: 1.6em 0;
+}
+
+/* ===== Mini cards nested inside Combat Values (Armor Class / Initiative / Speed) ===== */
+.dnd-sheet .callout[data-callout="ministat"] {
+  text-align: center;
+  padding: 6px 10px;
+  margin: 0 0 6px 0;
+  background: var(--dnd-bg);
+  overflow: visible !important;
+}
+.dnd-sheet .callout[data-callout="ministat"] .callout-title-inner {
+  font-size: 0.78em;
+}
+.dnd-sheet .callout[data-callout="ministat"] .callout-title {
+  min-height: unset !important;
+  padding: 0 !important;
+}
+.dnd-sheet .callout[data-callout="ministat"] .callout-content {
+  margin-top: 0 !important;
+  overflow: visible !important;
+  padding: 0 12px 4px !important;
+}
+/* Speed's value is generated by a dataviewjs block, which wraps its
+   output in a div carrying an inline style="overflow-x: auto" set by
+   the plugin itself, not by any CSS file - this is the actual element
+   the scrollbar was coming from, confirmed via dev tools inspection. */
+.dnd-sheet .callout[data-callout="ministat"] .block-language-dataviewjs {
+  overflow-x: visible !important;
+  overflow: visible !important;
+}
+.dnd-sheet .callout[data-callout="ministat"]:last-child {
+  margin-bottom: 0;
+}
+.dnd-sheet .ministat-value {
+  display: block;
+  font-size: 2.3em;
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--dnd-text);
+}
+
+/* ===== Big HP number, read-only display ===== */
+.dnd-sheet .hp-big {
+  display: block;
+  font-size: 2.3em;
+  font-weight: 700;
+  text-align: center;
+  color: var(--dnd-text);
+  margin-bottom: 4px;
+}
+
+/* ===== Actions tab: category labels + one card per entry ===== */
+.dnd-sheet .action-category {
+  display: block;
+  font-weight: 600;
+  font-size: 0.975em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dnd-accent);
+  margin-top: 14px;
+}
+.dnd-sheet .action-category:first-child {
+  margin-top: 0;
+}
+/* Grid instead of flex means every column always lands in the same
+   pixel position across every row, regardless of name length. No box/
+   background here - just a subtle divider, matching a plain table row
+   rather than a heavy card. !important guards against this getting
+   overridden by other display rules elsewhere in the vault's CSS. */
+.dnd-sheet .action-card {
+  display: grid !important;
+  /* 2026-09-23: dropped the two trailing 18px tracks that used to reserve
+     space for the per-row delete ("✕") button and its blank header
+     column - both were removed per the user's own request, and every row
+     here (Name/Range/Hit-DC/Damage/Type) is now exactly 5 grid items. */
+  grid-template-columns: 192px minmax(0, 0.6fr) minmax(0, 0.6fr) 70px 150px !important;
+  align-items: center;
+  column-gap: 14px;
+  border-bottom: 1px solid var(--dnd-border);
+  padding: 6px 2px;
+}
+.dnd-sheet .action-card-header {
+  font-weight: 600;
+  font-size: 0.68em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dnd-dim);
+  border-bottom: 2px solid var(--dnd-border);
+  padding-bottom: 6px;
+}
+.dnd-sheet .action-card-header span {
+  text-align: center;
+}
+.dnd-sheet .action-card-header span:first-child {
+  text-align: left;
+}
+.dnd-sheet .action-card > *:nth-child(2),
+.dnd-sheet .action-card > *:nth-child(3),
+.dnd-sheet .action-card > *:nth-child(4),
+.dnd-sheet .action-card > *:nth-child(5) {
+  text-align: center;
+}
+.dnd-sheet .action-name {
+  font-weight: 600;
+  color: var(--dnd-text);
+  text-align: left;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dnd-sheet .action-stat {
+  font-size: 0.85em;
+  color: var(--dnd-dim);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dnd-sheet .action-stat b {
+  color: var(--dnd-text);
+  font-weight: 700;
+}
+/* Hit/Damage (Actions tab) and Hit-DC/Effect (Spells tab) cells - either a
+   plain bold fallback (Dice Roller not installed/active, or nothing
+   rollable to show) or a Dice Roller roll button, same bold weight either
+   way so the layout doesn't shift depending on which one rendered. Dice
+   Roller's own CSS handles the button's clickable look (color/cursor); the
+   inline-flex + gap here is just so its icon/text and any trailing damage-
+   type text this plugin appends stay on one line inside the compact table
+   cell instead of wrapping oddly. */
+.dnd-sheet .action-stat .dice-roll-cell {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+  color: var(--dnd-text);
+  font-weight: 700;
+}
+.dnd-sheet .action-btn {
+  background: transparent;
+  border: none;
+  color: var(--dnd-dim);
+  font-size: 0.75em;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: none;
+}
+.dnd-sheet .action-btn:hover {
+  color: var(--dnd-text);
+  background: transparent;
+}
+/* The ⓘ description-popup button (see ActionsTracker.openActionInfoModal) -
+   dimmed and inert on rows with no description (e.g. a plain weapon attack)
+   rather than hidden, so every row keeps the same column count/alignment. */
+.dnd-sheet .action-info-btn {
+  font-size: 0.9em;
+}
+.dnd-sheet .action-info-btn-empty {
+  opacity: 0.25;
+  cursor: default;
+}
+.dnd-sheet .action-info-btn-empty:hover {
+  color: var(--dnd-dim);
+}
+
+/* Add-entry form: contain it visually so it reads as one unit,
+   separate from the card list below it. The paragraph holding all
+   four fields is forced into one flexible row so Meta Bind's own
+   field widths can't stack them vertically. */
+.dnd-sheet .add-action-form {
+  border: 1px solid var(--dnd-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 4px;
+}
+.dnd-sheet .add-action-form p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin: 0;
+}
+.dnd-sheet .add-action-form p:not(:last-child) {
+  margin-bottom: 14px;
+}
+.dnd-sheet .narrow-input input {
+  max-width: 60px;
+}
+/* Plugin-rendered trackers create plain <input class="narrow-input">
+   directly (no Meta Bind wrapper), so the descendant selector above
+   doesn't match any of them - this targets the input itself, scoped to
+   .dnd-sheet generally so it covers every tracker (HP, Spells, Actions,
+   Inventory, etc.) rather than just one. */
+.dnd-sheet input.narrow-input {
+  max-width: 60px;
+}
+.dnd-sheet .dmgtype-input input {
+  max-width: 90px;
+}
+.dnd-sheet .medium-input input {
+  max-width: 180px;
+}
+
+/* ===== Clean table look shared by Spells and Inventory tabs ===== */
+.dnd-sheet .spells-panel table th,
+.dnd-sheet .inventory-panel table th {
+  font-size: 0.68em;
+  border-bottom: 2px solid var(--dnd-border);
+}
+.dnd-sheet .spells-panel table td,
+.dnd-sheet .inventory-panel table td {
+  font-size: 0.85em;
+  border-bottom: 1px solid var(--dnd-border);
+}
+.dnd-sheet .spells-panel table tr:last-child td,
+.dnd-sheet .inventory-panel table tr:last-child td {
+  border-bottom: none;
+}
+.dnd-sheet .spells-panel table td:first-child a {
+  font-style: italic;
+  font-weight: 600;
+}
+.dnd-sheet .inventory-panel table td:first-child {
+  font-weight: 600;
+}
+
+/* Space out Meta Bind buttons (Damage/Heal, the tab bar, etc.).
+   Margin on every button (not just via +adjacency) so it still works
+   even if Meta Bind wraps each button in its own container div. */
+.dnd-sheet button {
+  margin: 2px 4px 2px 0;
+}
+
+/* "Update All" button, sitting right below the Add form */
+.dnd-sheet .action-btn-update {
+  background: var(--dnd-accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.85em;
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+
+/* Bulk-edit modal - a full-screen overlay with a centered box,
+   built directly in JS rather than through a separate plugin */
+.action-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.action-modal {
+  background: var(--dnd-card, #1b1e27);
+  border: 1px solid var(--dnd-border, #2a2e3a);
+  border-radius: 10px;
+  padding: 20px;
+  width: 95%;
+  max-width: 900px;
+  max-height: 80vh;
+  overflow-y: auto;
+  color: var(--dnd-text, #d7d9e0);
+}
+/* Add Item modal only - shortened 40% (60% of the base width/max-width
+   above), per request. Only this modal has the extra class, so no other
+   popup (Edit Inventory, Add Action, Edit Actions, Add Feature, etc.)
+   is affected. */
+.action-modal.add-item-modal {
+  width: 57%;
+  max-width: 540px;
+}
+/* Actions tab's small read-only description popup (the ⓘ button on each
+   row) - a short note, not a form, so it's narrower than the base modal. */
+.action-modal.action-modal-info {
+  width: 60%;
+  max-width: 480px;
+}
+.action-modal-info .feature-description {
+  white-space: pre-wrap;
+  color: var(--dnd-text);
+}
+.action-modal h3 {
+  margin-top: 0;
+}
+.action-modal-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+/* Inputs/selects have their own padding+border, which a plain header
+   <span> doesn't - without border-box, an element given the same CSS
+   "width" as its header label still renders physically wider, and the
+   mismatch compounds across columns. Forcing border-box on every
+   classed field here makes "width" mean the same thing as it does for
+   the header spans above them. */
+.action-modal-row input,
+.action-modal-row select,
+.action-modal-header-row span {
+  box-sizing: border-box;
+}
+.action-modal-actions .action-modal-row input,
+.action-modal-actions .action-modal-row select {
+  text-align: left !important;
+  padding-left: 0 !important;
+}
+.action-modal-actions .action-modal-row .action-modal-category,
+.action-modal-actions .action-modal-row .action-modal-restselect,
+.action-modal-actions .action-modal-row .action-modal-narrow,
+.action-modal-actions .action-modal-row .action-modal-stat {
+  text-align: center !important;
+  padding-left: 0 !important;
+}
+.action-modal-actions .action-modal-row select.action-modal-category,
+.action-modal-actions .action-modal-row select.action-modal-restselect {
+  text-align-last: center !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  padding-right: 0 !important;
+}
+.action-modal-actions .action-modal-row .action-modal-category option,
+.action-modal-actions .action-modal-row .action-modal-restselect option {
+  text-align: center;
+}
+.action-modal-row input[type="text"]:not(.action-modal-narrow):not(.action-modal-name):not(.action-modal-range):not(.action-modal-stat):not(.action-modal-dmg):not(.action-modal-dmgtype):not(.feature-name-input) {
+  flex: 1 1 auto !important;
+  min-width: 120px !important;
+}
+.action-modal-row .action-modal-narrow {
+  flex: 0 0 36px !important;
+  width: 36px !important;
+  min-width: 36px !important;
+  max-width: 36px !important;
+}
+/* Add Action modal only - Range/Hit/Damage stretched 100% (doubled) and
+   Damage Type stretched 150% (2.5x) from the base 36px narrow-field
+   width, per request. Separate classes from .action-modal-narrow so
+   this doesn't also widen the same fields in the Edit Actions modal. */
+.action-modal-row .aam-field-wide {
+  flex: 0 0 72px !important;
+  width: 72px !important;
+  min-width: 72px !important;
+  max-width: 72px !important;
+}
+.action-modal-row .aam-field-wider {
+  flex: 0 0 90px !important;
+  width: 90px !important;
+  min-width: 90px !important;
+  max-width: 90px !important;
+}
+.action-modal-row .action-modal-name {
+  flex: 1 1 auto !important;
+  width: 221px !important;
+  min-width: 153px !important;
+}
+/* Narrower variant for the Update Character Sheet modal's left column
+   (Overview / Special Senses / Combat Values / Hit Points) - scoped to
+   .modal-col so it doesn't affect the Actions/Inventory modals, which
+   share this same .action-modal-name class for their (wider) Name field */
+.modal-col .action-modal-row .action-modal-name {
+  flex: 0 0 130px !important;
+  width: 130px !important;
+  min-width: 100px !important;
+  max-width: 130px !important;
+}
+.action-modal-row .action-modal-range {
+  flex: 0 0 90px !important;
+  width: 90px !important;
+}
+.action-modal-row .action-modal-stat {
+  flex: 0 0 58px !important;
+  width: 58px !important;
+}
+.action-modal-row .action-modal-dmg {
+  flex: 0 0 75px !important;
+  width: 75px !important;
+}
+.action-modal-actions .action-modal-row input.action-modal-dmg {
+  padding-left: 2px !important;
+  padding-right: 10px !important;
+}
+.action-modal-row .action-modal-dmgtype {
+  flex: 0 0 90px !important;
+  width: 90px !important;
+}
+.action-modal-row .action-modal-category {
+  flex: 0 0 auto !important;
+  width: 130px !important;
+}
+.action-modal-row .action-modal-restselect {
+  flex: 0 0 auto !important;
+  width: 85px !important;
+}
+/* Header row above the action rows, echoing the Actions tab's own
+   table-header look (small, dim, uppercase). Uses the same width
+   classes as the inputs below it so columns line up. */
+.action-modal-header-row {
+  font-weight: 600;
+  font-size: 0.68em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dnd-dim);
+  border-bottom: 2px solid var(--dnd-border);
+  padding-bottom: 6px;
+  margin-bottom: 4px !important;
+}
+.action-modal-header-row span {
+  text-align: center;
+  padding-left: 0;
+}
+/* Actions modal only: keep each action on a single row instead of
+   wrapping. Scoped to .action-modal-actions so Inventory/Features/the
+   Update Character Sheet modal (which share .action-modal-row) keep
+   their normal wrapping behavior. */
+.action-modal-actions .action-modal-row {
+  flex-wrap: nowrap;
+}
+.action-modal-actions {
+  overflow-x: auto;
+}
+/* "Uses" needs a touch more room than the 36px .action-modal-narrow
+   gives elsewhere (Inventory's Weight/Qty/Cost, Senses, Features) -
+   scoped so those other modals keep their original narrower width. */
+.action-modal-actions .action-modal-row .action-modal-narrow {
+  flex: 0 0 42px !important;
+  width: 42px !important;
+  min-width: 42px !important;
+  max-width: 42px !important;
+}
+.action-modal-header-row span {
+  white-space: nowrap;
+}
+.action-modal-label {
+  font-size: 0.75em;
+  color: var(--dnd-dim);
+  white-space: nowrap;
+}
+.action-modal-btnrow {
+  margin-top: 14px;
+  display: flex;
+  gap: 8px;
+}
+
+/* ===== Features tab - DnDBeyond-style feature cards (2026-09-11) =====
+   Each feature is a "card" (just spacing + a divider, not a boxed panel,
+   matching the reference screenshot) with a name+citation header, a plain
+   description, an optional row of small "chosen option" pills for
+   choice-driven features, and an optional nested "Pool" resource widget. */
+.dnd-sheet .feature-card {
+  padding-top: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--dnd-border);
+}
+.dnd-sheet .feature-card:first-child {
+  padding-top: 0;
+}
+.dnd-sheet .feature-card:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.dnd-sheet .feature-card-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dnd-sheet .feature-name {
+  color: var(--dnd-text);
+  font-weight: 700;
+  font-size: 1.05em;
+}
+/* Features tab only (not the Actions tab's own feature-style cards, which
+   share this same .feature-card/.feature-name markup) - per request,
+   2026-09-21: keep the accent color scoped to the Actions tab's own
+   Action/Bonus Action/Reaction/Other group headers (.action-category,
+   below) and give every Features-tab card name the accent color instead;
+   everything on the Actions tab (feature-linked cards, the "Actions in
+   Combat" reference card, the "Spells" sub-list header) stays plain text
+   color like before. */
+.dnd-sheet .features-panel .feature-name {
+  color: var(--dnd-accent);
+}
+.dnd-sheet .feature-description {
+  font-size: 0.92em;
+  color: var(--dnd-text);
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+
+/* Small pill(s) for whatever a choice-driven feature's picker selected
+   (Weapon Mastery's weapons, Fighting Style's style, etc.) - nested/
+   indented under the description, same "belongs to the feature above it"
+   idea as DnDBeyond's own nested sub-feature cards. */
+.dnd-sheet .feature-subbox-wrap {
+  margin: 8px 0 2px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dnd-sheet .feature-subbox {
+  border-left: 3px solid var(--dnd-accent);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 0 4px 4px 0;
+  padding: 4px 10px;
+  color: var(--dnd-text);
+}
+.dnd-sheet .feature-subbox-name {
+  font-weight: 600;
+  font-size: 0.88em;
+}
+.dnd-sheet .feature-subbox-desc {
+  font-weight: 400;
+  font-size: 0.8em;
+  color: var(--dnd-dim, rgba(255, 255, 255, 0.6));
+  margin-top: 2px;
+}
+
+/* Resource "Pool" widget - replaces the old flat row of use checkboxes
+   with a nested, indented stepper (-/value/+) plus an Apply button that
+   only enables once the value's actually been changed, mirroring
+   DnDBeyond's own charge-pool widgets (e.g. Lay on Hands). */
+.dnd-sheet .feature-pool {
+  border-left: 3px solid var(--dnd-border);
+  margin: 10px 0 0 4px;
+  padding: 8px 0 2px 12px;
+}
+.dnd-sheet .feature-pool-title {
+  font-weight: 600;
+  font-size: 0.88em;
+  color: var(--dnd-text);
+  margin-bottom: 6px;
+}
+.dnd-sheet .feature-pool-avail-row {
+  font-size: 0.72em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dnd-dim);
+  margin-bottom: 6px;
+}
+.dnd-sheet .feature-pool-stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dnd-sheet .feature-pool-btn {
+  background: var(--dnd-accent);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  width: 26px;
+  height: 26px;
+  line-height: 1;
+  font-weight: 700;
+  font-size: 1em;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.dnd-sheet .feature-pool-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.dnd-sheet .feature-pool-value {
+  min-width: 64px;
+  text-align: center;
+  background: var(--background-modifier-form-field, #0d0e12);
+  border: 1px solid var(--dnd-border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-weight: 600;
+  color: var(--dnd-text);
+}
+.dnd-sheet .feature-pool-apply {
+  border: 1px solid var(--dnd-accent);
+  color: var(--dnd-accent);
+  background: transparent;
+  border-radius: 4px;
+  padding: 3px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dnd-sheet .feature-pool-apply:disabled {
+  opacity: 0.35;
+  cursor: default;
+  border-color: var(--dnd-border);
+  color: var(--dnd-dim);
+}
+.dnd-sheet .feature-pool-caption {
+  font-size: 0.75em;
+  color: var(--dnd-dim);
+  margin-top: 6px;
+}
+
+.feature-desc-block {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box !important;
+  margin-bottom: 8px;
+}
+.feature-desc-block .action-modal-label {
+  display: block;
+  margin-bottom: 4px;
+}
+.feature-desc-textarea {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  min-height: 80px;
+  box-sizing: border-box !important;
+  background: var(--background-modifier-form-field, #0d0e12);
+  border: 1px solid var(--background-modifier-border, #2a2e3a);
+  border-radius: 6px;
+  color: var(--dnd-text);
+  font-family: inherit;
+  font-size: 0.9em;
+  padding: 6px 8px !important;
+  resize: vertical;
+  margin: 4px 0 10px 0;
+}
+
+.dnd-sheet .player-notes-textarea {
+  display: block !important;
+  width: 100% !important;
+  max-width: none !important;
+  min-height: 260px;
+  box-sizing: border-box !important;
+  background: var(--background-modifier-form-field, #0d0e12);
+  border: 1px solid var(--background-modifier-border, #2a2e3a);
+  border-radius: 6px;
+  color: var(--dnd-text);
+  font-family: inherit;
+  font-size: 0.95em;
+  line-height: 1.5;
+  padding: 10px 12px;
+  resize: vertical;
+  margin: 0 0 10px 0;
+}
+
+/* Add/Edit Feature modals: dedicated width, separate from the other
+   modals which share .action-modal / .action-modal-name */
+.action-modal-feature {
+  max-width: 565px !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+.feature-name-input {
+  flex: 0 0 130px !important;
+  width: 130px !important;
+  box-sizing: border-box;
+}
+
+/* Level Up modal: read-only display of a feature pulled from the built-in
+   table (no input/textarea, just the name + description as text) */
+.feature-name-static {
+  font-weight: 600;
+  color: var(--dnd-accent);
+}
+.feature-desc-static {
+  font-size: 0.9em;
+  color: var(--dnd-text);
+  white-space: pre-wrap;
+  margin: 4px 0 10px 0;
+}
+
+/* Level Up modal: choice selector for a feature that hands the player a
+   list to pick from (Weapon Mastery, Fighting Style, Expertise, etc. - see
+   FEATURE_CHOICE_DEFS) instead of a fixed benefit. */
+.feature-choice-block .condition-desc {
+  margin-bottom: 4px;
+}
+.feature-choice-select {
+  display: block !important;
+  width: 100% !important;
+  max-width: none !important;
+  box-sizing: border-box !important;
+  background: var(--background-modifier-form-field, #0d0e12);
+  border: 1px solid var(--background-modifier-border, #2a2e3a);
+  border-radius: 6px;
+  color: var(--dnd-text);
+  font-family: inherit;
+  font-size: 0.9em;
+  padding: 4px;
+  /* Obsidian's own theme CSS sets a fixed single-line `height` on every
+     <select>, which wins over the `size` attribute's normal "one row per
+     option" native sizing and collapsed this down to showing just 1
+     option with the rest hidden behind a scrollbar - overriding back to
+     `auto` (plus a generous min-height as a floor for a short list) is
+     what actually lets `size` control how many rows show. */
+  height: auto !important;
+  min-height: 132px;
+}
+.feature-choice-select option {
+  padding: 3px 4px;
+}
+
+.dnd-sheet .spell-level-header {
+  font-family: 'Bitter', serif;
+  color: var(--dnd-accent);
+  font-size: 1.25em;
+  border-bottom: 1px solid var(--dnd-border);
+  padding-bottom: 4px;
+  margin-top: 16px;
+  margin-bottom: 4px;
+}
+.dnd-sheet .spell-level-header:first-child {
+  margin-top: 0;
+}
+
+/* ===== Spell slot checkboxes (JS-rendered, frontmatter-backed) ===== */
+.dnd-sheet .spell-slots-title {
+  font-weight: 600;
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dnd-dim);
+  margin-bottom: 8px;
+}
+.dnd-sheet .spell-slots-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.dnd-sheet .spell-slots-row .spell-slots-label {
+  font-weight: 600;
+  min-width: 70px;
+  color: var(--dnd-text);
+}
+
+/* ===== Heroic Inspiration + Death Saves (Hit Points box) ===== */
+.dnd-sheet .hp-extra-label {
+  font-weight: 600;
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dnd-dim);
+  margin-top: 12px;
+}
+.dnd-sheet .hp-extra-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+/* Features tab's All/Class Features/Species Traits/Feats filter row -
+   deliberately plainer/smaller than the Add Feature/Edit buttons above it
+   (not .action-btn-update's solid accent fill) so the filter reads as a
+   secondary, toggleable control rather than another action button; the
+   active one gets the accent fill back to show which filter is applied. */
+.dnd-sheet .feature-filter-row {
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.dnd-sheet .feature-filter-btn {
+  background: transparent;
+  color: var(--dnd-dim);
+  border: 1px solid var(--dnd-border);
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 0.78em;
+  cursor: pointer;
+  margin-bottom: 0;
+}
+.dnd-sheet .feature-filter-btn:hover {
+  color: var(--dnd-text);
+}
+.dnd-sheet .feature-filter-btn-active {
+  background: var(--dnd-accent);
+  color: white;
+  border-color: var(--dnd-accent);
+}
+/* Spells tab's Modifier/Spell Attack/Save DC row - three equal columns so
+   the center one lands at the row's true horizontal middle regardless of
+   how long the other two's text is, rather than a tight centered cluster
+   like .hp-extra-row above. Modifier/Save DC's own inset (pushing them in
+   from the row's left/right edges) is applied live in JS as inline
+   padding, sized off the Add Spell button's own width - see
+   applyAddBtnInset in main.js. */
+.dnd-sheet .spell-stat-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.dnd-sheet .spell-stat-row .spell-stat-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.dnd-sheet .spell-stat-row .spell-stat-group:nth-child(1) {
+  justify-content: flex-start;
+}
+.dnd-sheet .spell-stat-row .spell-stat-group:nth-child(2) {
+  justify-content: center;
+}
+.dnd-sheet .spell-stat-row .spell-stat-group:nth-child(3) {
+  justify-content: flex-end;
+}
+/* HP tracker is now fully plugin-rendered (real native checkboxes for
+   Heroic Inspiration and Death Saves, not Meta Bind toggles/buttons), so
+   this is just normal checkbox styling - accent-color works directly and
+   reliably since these are genuine input[type=checkbox] elements. */
+.dnd-sheet .hi-toggle-native,
+.dnd-sheet .ds-toggle-native {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--dnd-accent);
+  cursor: pointer;
+}
+
+/* Death Saves section only gets created by the plugin while HP <= 0, so
+   no CSS-based show/hide is needed here at all.
+   2026-09-23: .death-saves-row/.death-saves-icon had no CSS of their own
+   at all before this - the "Fail:"/"Success:" label and its three
+   checkboxes were plain inline elements with zero gap between them,
+   which is why the checkboxes sat pressed right up against the label
+   text (and each other) per the user's own screenshot. display:flex +
+   gap spaces every child evenly; the label's own extra margin-right
+   widens specifically the text-to-first-checkbox gap the user pointed
+   out, without having to give the checkboxes themselves any more room
+   between each other than the row's own gap already provides. */
+.dnd-sheet .death-saves-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.dnd-sheet .death-saves-icon {
+  margin-right: 6px;
+}
+
+/* ===== Add Spell form ===== */
+.dnd-sheet .add-spell-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.dnd-sheet .spell-add-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Marks a spell row as a computed/duplicate upcast entry rather than
+   the spell's natural level */
+.dnd-sheet .spell-upcast-tag {
+  font-size: 0.72em;
+  color: var(--dnd-dim);
+  font-style: italic;
+}
+
+/* ===== Spell rows - same visual language as Action rows, narrowed
+   to match D&D Beyond's own Time/Range/Hit-DC/Effect column set ===== */
+.dnd-sheet .spell-row {
+  display: grid;
+  grid-template-columns: 1.6fr 46px 85px 65px 1.4fr 18px;
+  align-items: center;
+  column-gap: 6px;
+  border-bottom: 1px solid var(--dnd-border);
+  padding: 5px 2px;
+}
+.dnd-sheet .spell-row-header {
+  font-weight: 600;
+  font-size: 0.68em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dnd-dim);
+  border-bottom: 2px solid var(--dnd-border);
+  padding-bottom: 6px;
+}
+.dnd-sheet .spell-row-header span {
+  text-align: right;
+}
+.dnd-sheet .spell-row-header span:first-child {
+  text-align: left;
+}
+.dnd-sheet .spell-row-header span:nth-child(2),
+.dnd-sheet .spell-row-header span:nth-child(3),
+.dnd-sheet .spell-row-header span:nth-child(4) {
+  text-align: center;
+}
+.dnd-sheet .spell-row-header span:nth-child(4) {
+  margin-left: 10px;
+}
+.dnd-sheet .spell-row > *:nth-child(2),
+.dnd-sheet .spell-row > *:nth-child(3),
+.dnd-sheet .spell-row > *:nth-child(4) {
+  text-align: center;
+}
+.dnd-sheet .spell-row > *:nth-child(4) {
+  margin-left: 10px;
+}
+
+/* ===== Inventory rows - Name/Weight/QTY/Cost/Equip only now (Attune and
+   Move moved off the row entirely - Attune lives on its own Attunement
+   page, see .attunement-* below, and Move/Remove live in the item detail
+   popup opened by clicking a row's name, see .item-detail-* below). ===== */
+.dnd-sheet .inventory-row {
+  display: grid;
+  /* 2026-09-23, later: separate fixed pixel widths for Weight/QTY/Cost/
+     Equip (even after widening them 10% - see below) still let Equip end
+     up the narrowest column, wrapping "EQUIP" onto two lines. Weight now
+     gets its own fixed, centered column, and QTY/Cost/Equip instead
+     share whatever space is left on the right in three EQUAL (1fr)
+     tracks - Equip can never again end up narrower than Cost or QTY,
+     whatever the panel's actual width.
+     2026-09-23, later still (2): the user circled where they actually
+     wanted the Weight column to land - roughly the true horizontal middle
+     of the row, not tucked in right after Name (Name's own 1fr track is
+     wide but its short text left a big blank gap before Weight, which is
+     what read as "not centered" even though the number itself was
+     correctly centered within its own narrow column). Tried reordering the
+     row to Name/QTY/Weight/Cost/Equip so Weight became the 3rd (middle)
+     track - WRONG, the user clarified: they wanted Name/Weight/QTY/Cost/
+     Equip kept in that order, just with Weight's column itself shifted
+     further right. Reverted the DOM/header order back to Name/Weight/QTY/
+     Cost/Equip (main.js) and instead gave Name a bigger share of the row
+     (2fr instead of 1fr) so its column - and everything after it,
+     including Weight - lands further right, without touching column
+     order. QTY/Cost/Equip keep sharing the rest equally. */
+  grid-template-columns: 2fr 70px 1fr 1fr 1fr;
+  align-items: center;
+  column-gap: 8px;
+  border-bottom: 1px solid var(--dnd-border);
+  padding: 6px 2px;
+}
+/* Centers whichever of QTY/Weight/Cost sits in tracks 2-4 (Equip already
+   centers via .inventory-equip-cell below) - written by position rather
+   than by column identity so it keeps working regardless of which of the
+   three occupies which track. */
+.dnd-sheet .inventory-row > .action-stat:nth-child(2),
+.dnd-sheet .inventory-row > .action-stat:nth-child(3),
+.dnd-sheet .inventory-row > .action-stat:nth-child(4) {
+  text-align: center;
+}
+.dnd-sheet .inventory-equip-cell {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+/* A row's name is now the only way to reach that item's Move/Remove
+   actions and its description (see openItemDetailModal) - styled to
+   visibly read as clickable rather than plain static text. */
+.dnd-sheet .inventory-item-name-cell {
+  cursor: pointer;
+  color: var(--dnd-text);
+  text-decoration: none;
+}
+.dnd-sheet .inventory-item-name-cell:hover {
+  text-decoration: underline;
+}
+.dnd-sheet .inventory-row-header {
+  font-weight: 600;
+  font-size: 0.68em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dnd-dim);
+  border-bottom: 2px solid var(--dnd-border);
+  padding-bottom: 6px;
+}
+.dnd-sheet .inventory-row-header span {
+  text-align: right;
+}
+.dnd-sheet .inventory-row-header span:first-child {
+  text-align: left;
+}
+.dnd-sheet .inventory-row-header span:nth-child(2),
+.dnd-sheet .inventory-row-header span:nth-child(3),
+.dnd-sheet .inventory-row-header span:nth-child(4) {
+  text-align: center;
+}
+/* 2026-09-23: the EQUIP header text was still right-aligned (the default
+   above) while its checkbox is flex-centered within .inventory-equip-cell
+   - the two didn't line up under each other. Centering the header here too
+   matches the checkbox's own alignment. */
+.dnd-sheet .inventory-row-header span:nth-child(5) {
+  text-align: center;
+}
+/* Equipment / Backpack / filtered section headers on the Inventory tab - a
+   bit more breathing room than the plain .stat-subheader default so
+   "Backpack" reads as a clear second group under the equipped items above
+   it, not just another cramped label. Paired in a flex row with the
+   optional backpack-toggle checkbox (see .inventory-backpack-toggle below)
+   so the two sit on one line instead of stacking.
+   2026-09-23: was `justify-content: space-between`, which shoved the
+   checkbox all the way to the far right of the row, away from the
+   "BACKPACK" text it actually toggles. Per the user's own mockup, `gap`
+   alone (flex-start) now sits it directly next to the header instead -
+   harmless for every other section header here too, since those never get
+   a second child to push apart from. */
+.dnd-sheet .inventory-section-header-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 10px;
+  margin-top: 20px;
+}
+.dnd-sheet .inventory-section-header-row:first-of-type {
+  margin-top: 10px;
+}
+.dnd-sheet .inventory-section-header {
+  margin-top: 0;
+  font-size: 0.975em;
+  color: var(--dnd-accent);
+}
+
+/* Backpack-toggle checkbox next to the Backpack section header (Request:
+   dims everything in the Backpack section when unticked, as a visual-only
+   reminder that the player doesn't currently have it on hand). 2026-09-23:
+   dropped its "Have backpack" text label - sitting right next to the
+   "BACKPACK" header now (see .inventory-section-header-row above) made the
+   label redundant; a title tooltip on the checkbox itself covers anyone
+   unsure what it does. */
+.dnd-sheet .inventory-backpack-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72em;
+  color: var(--dnd-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* The dimmed Backpack body itself - opacity only, deliberately not
+   disabling the controls underneath, so a player can still adjust things
+   in a pinch even while flagged as "don't have it right now". */
+.dnd-sheet .inventory-section-dimmed {
+  opacity: 0.4;
+}
+
+/* ---- Item detail popup (opened by clicking a row's name on the
+   Inventory tab) - name/link up top, the linked note's own description
+   rendered as real markdown below it, then Move/Remove/Close. ---- */
+.action-modal.item-detail-modal {
+  width: 60%;
+  max-width: 520px;
+}
+.item-detail-title {
+  margin-top: 0;
+}
+.item-detail-description {
+  color: var(--dnd-text, #d7d9e0);
+  margin-bottom: 14px;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+.item-detail-description p:first-child {
+  margin-top: 0;
+}
+.item-detail-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+/* Move dropdown (Equipment/Backpack/Party Inventory) - replaces what used
+   to be a single direction-specific Move button. Styled to match Obsidian's
+   own form-field look rather than a bare browser <select>, since this
+   modal (like every .action-modal) is appended straight to document.body,
+   outside .dnd-sheet - every --dnd-* var reference here needs its own
+   fallback or it silently resolves to nothing. */
+.item-detail-move-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+}
+.item-detail-move-label {
+  font-size: 0.85em;
+  color: var(--dnd-dim, #8b8f9c);
+  white-space: nowrap;
+}
+.item-detail-move-select {
+  background: var(--background-modifier-form-field, #0d0e12);
+  border: 1px solid var(--background-modifier-border, var(--dnd-border, #2a2e3a));
+  border-radius: 6px;
+  color: var(--dnd-text, #d7d9e0);
+  font-family: inherit;
+  font-size: 0.9em;
+  padding: 4px 8px;
+}
+.item-detail-remove-btn {
+  color: #d9534f;
+}
+
+/* ---- Attunement page (the "Attunement" filter button on the Inventory
+   tab) - 3 physical slots, then a checklist of the character's own items
+   that require attunement, then (if this character is in a party) a
+   second checklist for the party's shared items - mirrors D&D Beyond's
+   own Attunement layout. ---- */
+.dnd-sheet .attunement-section {
+  margin-top: 10px;
+}
+.dnd-sheet .attunement-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.dnd-sheet .attunement-slot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--dnd-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-height: 20px;
+}
+.dnd-sheet .attunement-slot::before {
+  content: "";
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--dnd-border);
+  flex: 0 0 auto;
+}
+.dnd-sheet .attunement-slot-filled {
+  border-color: var(--dnd-accent, #c05a4a);
+}
+.dnd-sheet .attunement-slot-filled::before {
+  border-color: var(--dnd-accent, #c05a4a);
+  background: var(--dnd-accent, #c05a4a);
+}
+.dnd-sheet .attunement-slot-placeholder {
+  color: var(--dnd-dim);
+  font-style: italic;
+  font-size: 0.9em;
+}
+.dnd-sheet .attunement-slot-name {
+  font-weight: 600;
+}
+.dnd-sheet .attunement-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+.dnd-sheet .attunement-checklist-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+/* Party items requiring attunement are informational only (no checkbox -
+   see renderAttunementSection) - a plain div, not a clickable <label>
+   like the checkable rows above it, so it shouldn't look clickable. */
+.dnd-sheet .attunement-checklist-row-readonly {
+  cursor: default;
+}
+.dnd-sheet .attunement-checklist-name {
+  flex: 1 1 auto;
+}
+.dnd-sheet .attunement-checklist-note {
+  font-size: 0.78em;
+  color: var(--dnd-dim);
+  white-space: nowrap;
+}
+
+/* ---- My Inventory / Party Inventory tab switcher - reuses the Features
+   tab's filter-button look (feature-filter-btn/-active) so every filter-
+   like control on the sheet reads consistently, rather than introducing a
+   third button style. ---- */
+.dnd-sheet .inventory-view-switcher {
+  margin-bottom: 4px;
+}
+
+/* ---- Weight-carried/party-name (left) + coin summary (right) row above
+   the Add/Edit buttons - mirrors D&D Beyond's own Inventory tab layout. ---- */
+.dnd-sheet .inventory-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.dnd-sheet .inventory-summary-label {
+  font-size: 0.82em;
+  font-weight: 600;
+  color: var(--dnd-text);
+}
+.dnd-sheet .inventory-currency-display {
+  display: flex;
+  gap: 8px;
+  cursor: pointer;
+  border: 1px solid var(--dnd-border);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+.dnd-sheet .inventory-currency-display:hover {
+  border-color: var(--dnd-accent);
+}
+.dnd-sheet .inventory-coin-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.1;
+}
+.dnd-sheet .inventory-coin-value {
+  font-weight: 600;
+  font-size: 0.85em;
+}
+.dnd-sheet .inventory-coin-label {
+  font-size: 0.62em;
+  letter-spacing: 0.05em;
+  color: var(--dnd-dim);
+}
+
+/* ---- Manage Coins popup - narrowed to half the base modal width, and its
+   number inputs widened 50% (36px -> 54px) so a 4+ digit amount doesn't
+   get clipped - both requested for desktop specifically. Guarded to
+   min-width: 701px (the inverse of this file's own max-width: 700px phone
+   breakpoint below) rather than touching that existing mobile block, so
+   the phone-width Manage Coins popup is completely unaffected by this and
+   keeps behaving exactly as it already does today (full-width, 36px
+   inputs) until a future pass is asked to update the mobile look too. ---- */
+@media (min-width: 701px) {
+  .action-modal.currency-modal {
+    width: 47.5%;
+    max-width: 450px;
+  }
+  .currency-modal .action-modal-row .action-modal-narrow {
+    flex: 0 0 54px !important;
+    width: 54px !important;
+    min-width: 54px !important;
+    max-width: 54px !important;
+  }
+}
+
+/* ===== Limited-Use Features tracker (Features tab) - reuses the
+   spell-slots-row layout, just with a rest-type badge and a remove
+   button added at the end of each row ===== */
+.dnd-sheet .feature-row {
+  gap: 8px;
+}
+
+/* Uses sub-row nested under an action card - pulled up against it and
+   indented so it reads as "belonging to" the row above, not a peer */
+.dnd-sheet .action-uses-row {
+  margin-top: -4px;
+  margin-bottom: 8px;
+  padding-left: 14px;
+  font-size: 0.85em;
+}
+.dnd-sheet .action-uses-row .spell-slots-label {
+  min-width: 40px;
+  color: var(--dnd-dim);
+  font-weight: 400;
+}
+.dnd-sheet .feature-rest-badge {
+  margin-left: auto;
+  font-size: 0.68em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dnd-dim);
+  border: 1px solid var(--dnd-border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+/* ===== Conditions & Exhaustion ===== */
+.dnd-sheet .condition-desc {
+  font-size: 0.78em;
+  color: var(--dnd-dim);
+  flex: 1;
+}
+/* DEAD swaps into the exact spot the HP number occupies, same size
+   and weight, controlled by the same "dead" cssclasses toggle used
+   for the whole-sheet dim effect */
+.dnd-sheet .dead-hp-text {
+  display: none;
+  font-size: 2.3em;
+  font-weight: 700;
+  text-align: center;
+  color: #e05a5a;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.dnd-sheet.dead .hp-big {
+  display: none;
+}
+.dnd-sheet.dead .dead-hp-text {
+  display: block;
+}
+
+/* Whole-sheet dim, triggered by exhaustion level 6 (cssclasses gets
+   a "dead" class added alongside dnd-sheet/tab-*) */
+.dnd-sheet.dead {
+  filter: grayscale(0.85) brightness(0.55);
+}
+
+/* "Dying" state (0 HP, still alive - rolling death saves): dims every
+   box EXCEPT Hit Points and Conditions (Unconscious gets auto-applied
+   there, so it needs to stay legible). This must be an explicit
+   include-list, not ":not([data-callout='hp'])" - the [!row] wrapper
+   that contains Overview/Combat/HP together also matches "not hp",
+   and since it's an ANCESTOR of the hp callout, dimming it would
+   composite-dim HP anyway regardless of HP's own exclusion. Only
+   listing the actual leaf content callouts (never row/colstack
+   wrappers) avoids that. */
+.dnd-sheet.dying .callout[data-callout="charinfo"],
+.dnd-sheet.dying .callout[data-callout="combat"],
+.dnd-sheet.dying .callout[data-callout="ministat"],
+.dnd-sheet.dying .callout[data-callout="stat"],
+.dnd-sheet.dying .callout[data-callout="defenses"],
+.dnd-sheet.dying .callout[data-callout="saves"],
+.dnd-sheet.dying .callout[data-callout="senses"],
+.dnd-sheet.dying .callout[data-callout="profbonus"],
+.dnd-sheet.dying .callout[data-callout="lifeevents"],
+.dnd-sheet.dying .callout[data-callout="goals"],
+.dnd-sheet.dying .callout[data-callout="skills"],
+.dnd-sheet.dying .callout[data-callout="details"] {
+  filter: grayscale(0.5) brightness(0.65);
+}
+.dnd-sheet.dying h1,
+.dnd-sheet.dying hr {
+  filter: grayscale(0.5) brightness(0.65);
+}
+
+/* ===== Defense chips (Resistances/Immunities/Vulnerabilities) ===== */
+.dnd-sheet .defense-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--dnd-bg);
+  border: 1px solid var(--dnd-border);
+  border-radius: 10px;
+  padding: 1px 6px 1px 8px;
+  margin: 2px 4px 2px 0;
+  color: var(--dnd-text);
+}
+.dnd-sheet .defense-chip .action-btn {
+  width: 14px;
+  height: 14px;
+  font-size: 0.7em;
+}
+
+/* ===== Saves / Senses / Skills rows (DataviewJS-driven) ===== */
+.dnd-sheet .stat-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 2px;
+  font-size: 0.92em;
+}
+.dnd-sheet .stat-dot {
+  width: 14px;
+  flex-shrink: 0;
+  text-align: center;
+  color: var(--dnd-dim);
+}
+/* Expertise (double proficiency bonus) skills use a circled-dot glyph
+   (see SkillsTracker.render) - colored with the accent color instead of
+   the dim gray every other dot uses, so an Expertise skill stands out from
+   a plain-proficient one at a glance, not just on close inspection. */
+.dnd-sheet .stat-dot-expertise {
+  color: var(--dnd-accent);
+  font-weight: 700;
+}
+.dnd-sheet .stat-ability {
+  width: 32px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--dnd-dim);
+}
+.dnd-sheet .stat-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--dnd-text);
+}
+.dnd-sheet .stat-value {
+  font-weight: 700;
+  min-width: 30px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--dnd-text);
+}
+/* ===== Saving Throws: two-column layout (STR/DEX/CON | INT/WIS/CHA),
+   with larger value text. Scoped to [!saves] only, since .stat-row/
+   .stat-value are shared with Senses and Skills, which should keep
+   their normal single-column size. ===== */
+.dnd-sheet .callout[data-callout="saves"] .saves-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 10px;
+}
+.dnd-sheet .callout[data-callout="saves"] .stat-row {
+  gap: 4px;
+  padding: 4px 0;
+}
+.dnd-sheet .callout[data-callout="saves"] .stat-dot {
+  width: 10px;
+}
+.dnd-sheet .callout[data-callout="saves"] .stat-ability {
+  width: 40px;
+  font-size: 1.5em;
+}
+.dnd-sheet .callout[data-callout="saves"] .stat-value {
+  font-size: 2em;
+  min-width: 34px;
+  margin-left: 12px;
+}
+.dnd-sheet .callout[data-callout="senses"] .special-senses {
+  margin-top: 10px;
+}
+.dnd-sheet .stat-subheader {
+  font-weight: 600;
+  font-size: 0.72em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dnd-dim);
+  margin-top: 12px;
+  margin-bottom: 2px;
+}
+.dnd-sheet .stat-subheader:first-child {
+  margin-top: 0;
+}
+/* Bigger separation between sections specifically inside the Update
+   Character Sheet modal - the main-sheet Saves/Skills boxes keep the
+   tighter default above */
+.action-modal .stat-subheader {
+  margin-top: 24px;
+}
+.action-modal .stat-subheader:first-child {
+  margin-top: 0;
+}
+
+/* ===== Update Character Sheet modal: wider, two-column layout ===== */
+.action-modal-wide {
+  max-width: 720px !important;
+}
+.modal-columns {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+.modal-col {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.modal-columns > .modal-col:first-child {
+  flex: 0 1 300px;
+  max-width: 300px;
+}
+.modal-columns > .modal-col:nth-child(2) {
+  flex: 0 1 320px;
+  max-width: 320px;
+}
+
+.checklist-box {
+  display: flex;
+  flex-direction: column;
+  max-height: 130px;
+  overflow-y: auto;
+  gap: 2px;
+  flex: 1 1 auto;
+  border: 1px solid var(--dnd-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--dnd-bg, #14161d);
+}
+.checklist-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85em;
+  color: var(--dnd-text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.checklist-item input[type="checkbox"] {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+/* Grid-aligned Saving Throws / Skills rows inside the modal - every
+   row shares the same column template, so STR/DEX/etc, skill names,
+   checkboxes, and values all line up vertically */
+.save-edit-row {
+  display: grid;
+  grid-template-columns: 40px 24px 60px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ability-edit-row {
+  display: grid;
+  grid-template-columns: 40px 55px 55px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ability-edit-row .condition-desc,
+.save-edit-row .condition-desc,
+.skill-edit-row .condition-desc {
+  font-weight: 700;
+  color: var(--dnd-text);
+  text-align: center;
+}
+.skill-edit-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 130px) 24px 60px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.save-edit-row input[type="text"],
+.ability-edit-row input[type="text"],
+.skill-edit-row input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Custom callout types had no explicit --callout-color, so they fell back
+   to Obsidian's default (blue) instead of the sheet's red accent theme.
+   Excluding colstack/column/row - those are invisible layout wrappers
+   (confirmed by the original file's own comments) and should never carry
+   a visible accent color at all. */
+.dnd-sheet .callout[data-callout="charinfo"],
+.dnd-sheet .callout[data-callout="combat"],
+.dnd-sheet .callout[data-callout="conditions"],
+.dnd-sheet .callout[data-callout="defenses"],
+.dnd-sheet .callout[data-callout="details"],
+.dnd-sheet .callout[data-callout="hp"],
+.dnd-sheet .callout[data-callout="ministat"],
+.dnd-sheet .callout[data-callout="profbonus"],
+.dnd-sheet .callout[data-callout="saves"],
+.dnd-sheet .callout[data-callout="senses"],
+.dnd-sheet .callout[data-callout="skills"],
+.dnd-sheet .callout[data-callout="stat"] {
+  --callout-color: 192, 90, 74;
+}
+.dnd-sheet .callout[data-callout="colstack"],
+.dnd-sheet .callout[data-callout="column"],
+.dnd-sheet .callout[data-callout="row"] {
+  --callout-color: transparent;
+}
+
+/* Simple, broad approach: remove the border/shadow/outline on every
+   callout inside the sheet at once, rather than listing individual types -
+   catches everything (Skills, Saving Throws, Senses, Character Details,
+   etc.) without needing to enumerate each one by name. Also explicitly
+   targeting .callout-title, since removing the outer callout's border
+   revealed a separate border on the title row that was previously
+   overlapping/hidden behind it. */
+.dnd-sheet .callout,
+.dnd-sheet .callout-title,
+.dnd-sheet .callout-title-inner,
+.dnd-sheet .callout-content {
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* [!column] wrapping STORY LINE / HISTORIE: was still getting the
+   flat dnd-sheet card background/padding behind the two buttons -
+   make it an invisible layout wrapper like [!row]/[!colstack]. */
+.dnd-sheet .callout[data-callout="column"] {
+  background: transparent;
+  padding: 0;
+}
+
+/* Backstory quote box + all the main sheet cards: keep the drop shadow
+   that Callouts.css's quote-callout skin gives [!quote] by default,
+   applied here to every card on the sheet for a consistent look -
+   stripped by the blanket border/shadow-removal rule above. */
+.dnd-sheet .callout[data-callout="quote"],
+.dnd-sheet .callout[data-callout="charinfo"],
+.dnd-sheet .callout[data-callout="combat"],
+.dnd-sheet .callout[data-callout="hp"],
+.dnd-sheet .callout[data-callout="defenses"],
+.dnd-sheet .callout[data-callout="conditions"],
+.dnd-sheet .callout[data-callout="stat"],
+.dnd-sheet .callout[data-callout="saves"],
+.dnd-sheet .callout[data-callout="senses"],
+.dnd-sheet .callout[data-callout="profbonus"],
+.dnd-sheet .callout[data-callout="skills"],
+.dnd-sheet .callout[data-callout="details"] {
+  box-shadow: var(--shadow-l) !important;
+}
+/* Quote box keeps its side brackets - only the 11 sheet cards above
+   had theirs removed. */
+.dnd-sheet .callout[data-callout="quote"] {
+  border-left: 4px solid white !important;
+  border-right: 4px solid white !important;
+}
+
+/* ===== STORY LINE / HISTORIE buttons: these are just [!important]
+   and [!note] callouts, which already have a nice "button" look
+   (border, icon, fold-chevron, mint/grey color) from the Prism-callout
+   block in Callouts.css - the blanket rules above strip that from
+   every callout in the sheet. Exempt just these two types so their
+   native look comes back instead of the flat dnd-sheet card. */
+.dnd-sheet .callout[data-callout="important"],
+.dnd-sheet .callout[data-callout="note"] {
+  background: transparent;
+  padding: 0;
+  margin: 0;
+}
+.dnd-sheet .callout[data-callout="important"] .callout-icon,
+.dnd-sheet .callout[data-callout="important"] .callout-fold,
+.dnd-sheet .callout[data-callout="note"] .callout-icon,
+.dnd-sheet .callout[data-callout="note"] .callout-fold {
+  display: flex !important;
+}
+.dnd-sheet .callout[data-callout="important"] > .callout-title,
+.dnd-sheet .callout[data-callout="note"] > .callout-title {
+  border: 2px solid !important;
+  box-shadow: none !important;
+}
+.dnd-sheet .callout[data-callout="important"] > .callout-title {
+  border-color: var(--color-mint-tint) !important;
+}
+/* "note"'s default grey fill/border (from Callouts.css's theme-dark
+   values) is nearly the same darkness as the dnd-sheet card background
+   and disappears - give it its own visible tint instead. */
+.dnd-sheet .callout[data-callout="note"] > .callout-title {
+  background-color: rgba(215, 217, 224, 0.07) !important;
+  border-color: rgba(215, 217, 224, 0.35) !important;
+  color: var(--dnd-dim) !important;
+}
+.dnd-sheet .callout[data-callout="note"] > .callout-title .callout-icon,
+.dnd-sheet .callout[data-callout="note"] > .callout-title .callout-icon .svg-icon {
+  color: var(--dnd-dim) !important;
+}
+
+/* ===== "Create Character sheet" wizard (3 pages: Basics / Spells / Gear) ===== */
+.action-modal-btnrow-split {
+  justify-content: space-between;
+}
+.wizard-page-title {
+  font-size: 0.85em;
+  color: var(--dnd-dim);
+  margin: -6px 0 14px 0;
+}
+.wizard-empty-note {
+  color: var(--dnd-dim);
+  font-style: italic;
+  padding: 8px 0;
+}
+/* Class Info / Species Info panels (Create Character wizard's Class and
+   Species pages) - each trait/feature is a bold name line plus its
+   description right underneath, separated from the next entry by a thin
+   divider rather than just blank space. */
+.wizard-info-row {
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--dnd-border, #2a2e3a);
+}
+.wizard-info-row:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+/* .stat-subheader/.action-modal-label's usual sizing/color assumes a
+   .dnd-sheet ancestor this modal doesn't have, so inside these two panels
+   they were rendering smaller and dimmer than the plain description text
+   underneath them - the opposite of a header. Scoped to just these
+   panels (not the wizard's other pages, and not every other
+   .action-modal-label row-label use elsewhere, like "Race"/"STR"), sized
+   up from their own base (.action-modal-label: 0.75em, .stat-subheader:
+   0.72em within a .dnd-sheet context) and colored to match the "Update"/
+   "Create" button's accent so they read as real section/entry headers.
+   Every other rule that reaches for --dnd-accent/--dnd-border lives
+   inside a note rendered with the "dnd-sheet" cssclass, where .dnd-sheet
+   defines those custom properties - this modal is appended straight to
+   <body>, outside that scope, so var(...) alone silently resolves to
+   nothing (no color at all, not even a wrong one). The same fallback-
+   value pattern .action-modal itself already uses for --dnd-card/
+   --dnd-border/--dnd-text just above fixes it here too. */
+.wizard-info-panel .stat-subheader {
+  font-size: 1.01em;
+  color: var(--dnd-accent, #c05a4a);
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.wizard-info-panel .wizard-info-row .action-modal-label {
+  font-size: 1.05em;
+  color: var(--dnd-accent, #c05a4a);
+  white-space: normal;
+}
+.wizard-spell-section {
+  margin-bottom: 18px;
+}
+.wizard-spell-section .stat-subheader {
+  margin-top: 0;
+}
+.wizard-spell-select {
+  width: 100%;
+  min-height: 140px;
+}
+.wizard-spell-hint {
+  font-size: 0.75em;
+  color: var(--dnd-dim);
+  margin-top: 4px;
+}
+/* Running "N chosen / cap" counter under a spell picker (Create/Update
+   wizards and Level Up's "New Spells" section) - bolder/accent-colored so
+   it reads as live status rather than just another static hint line. */
+.wizard-spell-counter {
+  font-weight: 600;
+  color: var(--dnd-accent);
+}
+/* Once a spell picker's known-spell cap is reached, the remaining
+   unselected options get disabled (see spellsKnownCapFor's callers) -
+   most themes already gray these out, but this makes it explicit and
+   consistent across themes/browsers instead of relying on that. */
+.wizard-spell-select option:disabled {
+  color: var(--dnd-dim);
+  opacity: 0.6;
+}
+.wizard-pack-row {
+  margin-bottom: 10px;
+}
+.wizard-pack-row > label.checklist-item {
+  font-weight: 600;
+}
+.wizard-pack-contents {
+  font-size: 0.8em;
+  color: var(--dnd-dim);
+  margin: 2px 0 0 24px;
+}
+.wizard-gear-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.wizard-gear-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px;
+}
+
+/* ===== D&D Beyond-style top bar + name/portrait arrow nav (Create
+   Character wizard). Same "this modal is appended straight to <body>,
+   outside the .dnd-sheet cssclass scope, so var(...) alone can resolve to
+   nothing" reasoning as .wizard-info-panel above - every color var here
+   carries the same literal fallback. ===== */
+.wizard-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: -20px -20px 16px -20px;
+  padding: 10px 20px;
+  background: var(--dnd-bg, #14161d);
+  border-bottom: 1px solid var(--dnd-border, #2a2e3a);
+  border-radius: 10px 10px 0 0;
+  overflow-x: auto;
+}
+.wizard-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--dnd-dim, #8b8f9c);
+  font-size: 0.78em;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.wizard-tab:hover {
+  color: var(--dnd-text, #d7d9e0);
+}
+.wizard-tab.is-active {
+  color: var(--dnd-accent, #c05a4a);
+  border-bottom-color: var(--dnd-accent, #c05a4a);
+}
+.wizard-tab.is-complete:not(.is-active)::after {
+  content: " \2713";
+  color: var(--dnd-accent, #c05a4a);
+  opacity: 0.7;
+}
+/* Name/portrait row - the arrows sit at the far left/right edges of the
+   modal (matching the reference screenshot), with the portrait preview +
+   Name field grouped together just to their right, not centered. Portrait
+   is still actually CHOSEN down on the Background page (buildCharSheetFields
+   already puts a full picker there) - this thumbnail is a live read-only
+   preview of that same choice, kept in sync by refreshNameBarPortrait(). */
+.wizard-namebar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--dnd-border, #2a2e3a);
+}
+.wizard-namebar-arrow {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--dnd-card, #1b1e27);
+  border: 1px solid var(--dnd-border, #2a2e3a);
+  border-radius: 8px;
+  color: var(--dnd-accent, #c05a4a);
+  font-size: 1.1em;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.wizard-namebar-arrow:hover:not(:disabled) {
+  border-color: var(--dnd-accent, #c05a4a);
+}
+.wizard-namebar-arrow:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.wizard-namebar-main {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.wizard-namebar-portrait {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  border: 1px dashed var(--dnd-border, #2a2e3a);
+  object-fit: cover;
+  background: var(--dnd-bg, #14161d);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dnd-dim, #8b8f9c);
+  font-size: 1.2em;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.wizard-namebar-portrait:hover {
+  border-color: var(--dnd-accent, #c05a4a);
+  color: var(--dnd-accent, #c05a4a);
+}
+.wizard-namebar-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 1.05em;
+  font-weight: 600;
+}
+
+/* ===== Species/Class pickers as searchable card lists (Create Character
+   wizard) + the "Confirm Species"/"Confirm Class" popup they open into. ===== */
+.wizard-card-search {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  background: var(--dnd-bg, #14161d);
+  border: 1px solid var(--dnd-border, #2a2e3a);
+  border-radius: 6px;
+  color: var(--dnd-text, #d7d9e0);
+}
+.wizard-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.wizard-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--dnd-card, #1b1e27);
+  border: 1px solid var(--dnd-border, #2a2e3a);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.wizard-card:hover {
+  border-color: var(--dnd-accent, #c05a4a);
+}
+.wizard-card.is-selected {
+  border-color: var(--dnd-accent, #c05a4a);
+  background: color-mix(in srgb, var(--dnd-accent, #c05a4a) 12%, var(--dnd-card, #1b1e27));
+}
+.wizard-card-name {
+  font-weight: 600;
+  color: var(--dnd-text, #d7d9e0);
+}
+.wizard-card-name .wizard-card-selected-tag {
+  margin-left: 8px;
+  font-size: 0.72em;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--dnd-accent, #c05a4a);
+}
+.wizard-card-chevron {
+  color: var(--dnd-accent, #c05a4a);
+  font-size: 1.1em;
+  flex-shrink: 0;
+}
+.wizard-card-empty {
+  color: var(--dnd-dim, #8b8f9c);
+  font-style: italic;
+  padding: 10px 2px;
+}
+
+.wizard-confirm-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.65);
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.wizard-confirm-modal {
+  background: var(--dnd-card, #1b1e27);
+  border: 1px solid var(--dnd-border, #2a2e3a);
+  border-radius: 10px;
+  width: 92%;
+  max-width: 560px;
+  max-height: 82vh;
+  overflow-y: auto;
+  color: var(--dnd-text, #d7d9e0);
+  padding: 0;
+}
+.wizard-confirm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--dnd-border, #2a2e3a);
+  background: var(--dnd-bg, #14161d);
+  border-radius: 10px 10px 0 0;
+}
+.wizard-confirm-header h3 {
+  margin: 0;
+  color: var(--dnd-accent, #c05a4a);
+}
+.wizard-confirm-close {
+  background: transparent;
+  border: none;
+  color: var(--dnd-dim, #8b8f9c);
+  font-size: 1.2em;
+  cursor: pointer;
+  line-height: 1;
+}
+.wizard-confirm-close:hover {
+  color: var(--dnd-text, #d7d9e0);
+}
+.wizard-confirm-body {
+  padding: 16px 20px;
+}
+.wizard-confirm-desc {
+  font-style: italic;
+  color: var(--dnd-text, #d7d9e0);
+  margin: 0 0 12px 0;
+  line-height: 1.4;
+}
+.wizard-confirm-summary {
+  font-size: 0.85em;
+  color: var(--dnd-dim, #8b8f9c);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+.wizard-confirm-summary strong {
+  color: var(--dnd-text, #d7d9e0);
+}
+.wizard-confirm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--dnd-border, #2a2e3a);
+}
+
+/* ===== Homebrew Content wizards (Settings > D&D 2024 Character Sheet >
+   Homebrew Content's Add/Edit Class/Subclass/Race/Feature popups) ===== */
+.action-modal-homebrew .setting-item-description {
+  margin-bottom: 12px;
+}
+/* One box per Subclass Feature / Race Trait row inside those wizards -
+   same bordered-box treatment the old inline "homebrew-race-box" used,
+   just also reused for Subclass Features now. */
+.homebrew-feature-box {
+  border: 1px solid var(--background-modifier-border, #2a2e3a);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 10px;
+}
+.homebrew-mechanic-editor {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--background-modifier-border, #2a2e3a);
+}
+.homebrew-mechanic-body {
+  margin-top: 6px;
+  padding-left: 8px;
+}
+.homebrew-wizard-error {
+  color: var(--text-error, #e06c75);
+  font-size: 0.85em;
+  min-height: 1.2em;
+  margin: 4px 0;
+}
+
+/* ===== Settings > D&D 2024 Character Sheet - bigger section headers =====
+   The plugin's own settings tab (the "D&D 2024 Character Sheet" heading,
+   "Extra sections"/"Homebrew Content", and the Classes/Subclasses/
+   Races/Features sub-headings inside Homebrew Content) used Obsidian's
+   plain default h2/h3/h4 sizing, which read as too small next to the rest
+   of this plugin's settings. Doubled relative to whatever the active theme
+   actually sets (Obsidian exposes its own heading sizes as
+   --h2-size/--h3-size/--h4-size), with a plain-em fallback for any theme
+   that doesn't define them, rather than a fixed px value - so this still
+   scales sensibly across different themes/font-size settings instead of
+   overriding them outright. Scoped to .dnd2024-settings-tab (added to
+   containerEl in Dnd2024SettingTab.display()) so it never touches any
+   other plugin's settings headings. */
+.dnd2024-settings-tab h2 {
+  font-size: calc(var(--h2-size, 1.8em) * 2);
+}
+.dnd2024-settings-tab h3 {
+  font-size: calc(var(--h3-size, 1.5em) * 2);
+}
+.dnd2024-settings-tab h4 {
+  font-size: calc(var(--h4-size, 1.3em) * 2);
+}
+
+/* ============================================================
+   Phone adaptation (2026-09-20)
+   Everything above this point was designed for a desktop-width
+   Obsidian window and never adjusted for a phone screen - there was no
+   @media rule anywhere in this file before this section. Everything
+   below is purely additive: a single breakpoint that reflows the same
+   markup/DOM (nothing in main.js changes for this) into a one-column,
+   bigger-touch-target layout under ~700px wide, matching the width
+   .action-modal-wide already treats as this plugin's own "wide"/
+   "narrow" boundary. Above 700px (a normal desktop/tablet Obsidian
+   window) every rule above this line renders completely unchanged.
+
+   Where an overridden property was declared with !important above (or
+   at equal-or-higher selector specificity, e.g. the row/colstack
+   flex-child rules, which are more specific than a plain child
+   selector because they also match a [data-callout="..."] attribute),
+   the override here also uses !important so it reliably wins
+   regardless of source order/specificity - same reasoning this file's
+   existing !important uses already document. ============================================================ */
+
+/* ---- Mobile app-style navigation (2026-09-22), added by
+   mobile-nav-tracker/MobileNavTracker in main.js. Hidden outside the
+   phone breakpoint by default so a desktop-width window never shows it -
+   the tracker itself still renders (it needs to, so its own writes to
+   `mobile_page`/`mobile-page-*` stay correct even while hidden), just not
+   visible. Everything that actually shows/positions it lives inside the
+   @media block below. */
+.dnd-sheet .mobile-nav-root,
+.mobile-nav-menu-overlay {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  /* ---- Page-level: reclaim horizontal space, slightly smaller base
+     text so more fits without every line wrapping. ---- */
+  .dnd-sheet .markdown-preview-view,
+  .dnd-sheet .markdown-source-view .cm-scroller {
+    padding: 14px 12px;
+    font-size: 14px;
+  }
+  .dnd-sheet h1 {
+    font-size: 1.6em;
+  }
+
+  /* ---- [!row] layouts (Overview/Combat/HP row; Saves/Senses/Skills/
+     Details row) - these already use flex-wrap, but each child also
+     carries a min-width (130-320px) that's wider than a phone's usable
+     content width, so on a narrow screen they'd wrap into an
+     unpredictable 2-then-1 pattern instead of a clean single column.
+     Forcing every direct child to full width stacks them into one
+     readable column, top to bottom, in the same order they already
+     render in. */
+  .dnd-sheet .callout[data-callout="row"] > .callout-content {
+    gap: 10px;
+  }
+  .dnd-sheet .callout[data-callout="row"] > .callout-content > .callout {
+    flex: 1 1 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  /* Overview card's own internal text+portrait side-by-side split -
+     stack instead, portrait under the text, rather than squeezing a
+     250px-wide image next to a couple of characters of text. */
+  .dnd-sheet .overview-flex-row {
+    flex-direction: column;
+  }
+  .dnd-sheet .overview-right-col {
+    flex: 0 0 auto;
+    width: 100%;
+    max-height: 220px;
+  }
+  /* Export PDF / Update Character Sheet / Level Up - three buttons that
+     never wrapped (hp-extra-row's flex-wrap is "nowrap" by default), so on
+     a narrow phone they ran past both screen edges. Let them wrap, and
+     shrink them a bit, without touching .action-btn-update everywhere
+     else on the sheet. */
+  .dnd-sheet .overview-btn-row {
+    margin-top: 12px !important;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .dnd-sheet .overview-btn-row .action-btn-update {
+    flex: 1 1 auto;
+    font-size: 0.78em;
+    padding: 6px 8px;
+    white-space: nowrap;
+  }
+
+  /* Big display numbers (AC/Initiative/Speed mini-cards, ability-score
+     modifiers, the giant HP number, Saving Throws' enlarged values) -
+     scaled down a bit so they don't dwarf a narrow card the way they
+     can afford to on a wide desktop column. */
+  .dnd-sheet .stat-mod,
+  .dnd-sheet .ministat-value,
+  .dnd-sheet .hp-big,
+  .dnd-sheet .dead-hp-text {
+    font-size: 1.8em;
+  }
+  .dnd-sheet .profbonus-value {
+    font-size: 1.5em;
+  }
+  .dnd-sheet .callout[data-callout="saves"] .stat-value {
+    font-size: 1.6em;
+  }
+  .dnd-sheet .callout[data-callout="saves"] .stat-ability {
+    font-size: 1.2em;
+  }
+
+  /* ---- Actions/Spells/Inventory tabs: each row is a fixed-column CSS
+     grid sized for a desktop-width panel. Narrowing every fixed column
+     (the flexible fr columns just share whatever's left) gets these
+     close to fitting a phone's width without dropping any column
+     outright - if a name or value still runs long, it truncates with
+     an ellipsis (already the case today, see .action-name/.action-stat)
+     rather than breaking the grid. As a safety net for anything that
+     still doesn't fit, the panel itself can scroll horizontally instead
+     of forcing the whole page wider. */
+  .dnd-sheet .actions-panel,
+  .dnd-sheet .spells-panel,
+  .dnd-sheet .inventory-panel {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .dnd-sheet .action-card {
+    /* 2026-09-23: dropped the two trailing 18px tracks along with the
+       desktop rule above - see that rule's comment. */
+    grid-template-columns: minmax(90px, 1fr) 42px 42px 34px 56px !important;
+    column-gap: 8px;
+    font-size: 0.92em;
+  }
+  .dnd-sheet .spell-row {
+    grid-template-columns: minmax(90px, 1.4fr) 38px 46px 46px minmax(70px, 1fr) 18px;
+    column-gap: 4px;
+    font-size: 0.92em;
+  }
+  .dnd-sheet .inventory-row {
+    grid-template-columns: minmax(90px, 1fr) 38px 28px 38px 26px 26px 50px 18px;
+    column-gap: 4px;
+    font-size: 0.92em;
+  }
+  .dnd-sheet .inventory-move-btn {
+    font-size: 0.62em;
+    padding: 1px 3px;
+  }
+
+  /* Each header row (Actions/Spells/Inventory) shares its grid class with
+     the mobile column-width rule just above (.action-card/.spell-row/
+     .inventory-row), so at equal selector specificity the later, larger
+     0.92em rule was winning over each header's own smaller 0.68em -
+     "WEIGHT"/"EQUIP"/"HIT/DC"/"DAMAGE" etc. no longer fit their narrow
+     mobile columns and wrapped onto a second line ("WEIG"/"HT"). Restore
+     the smaller header font specifically, with !important so it wins
+     regardless of source order, plus nowrap/ellipsis as a safety net for
+     anything still tight on a very narrow screen. */
+  .dnd-sheet .action-card-header,
+  .dnd-sheet .spell-row-header,
+  .dnd-sheet .inventory-row-header {
+    font-size: 0.6em !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Spells tab's Modifier/Spell Attack/Save DC row - desktop insets the
+     first/last group from the row's edges with inline JS padding sized off
+     the Add Spell button's own width (applyAddBtnInset in main.js), so it
+     doesn't sit flush against the panel border. On a phone-width panel
+     that same padding (1.5x a touch-target-sized button, ~110-150px) eats
+     most of the available width, shoving everything far to the right with
+     the rest cut off - that padding is set as an inline style, so only an
+     !important rule here can override it. Drop it entirely on mobile and
+     stack the three groups one per line instead of squeezing them into
+     three equal columns, each centered so they read cleanly regardless of
+     label length. */
+  .dnd-sheet .spell-stat-row {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 6px;
+  }
+  .dnd-sheet .spell-stat-row .spell-stat-group {
+    justify-content: center !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  /* ---- Popup modals (Update Character Sheet, Create Character wizard,
+     Add/Edit Action/Item/Feature, etc.) - go nearly full-screen instead
+     of a centered box with side margins a phone doesn't have room to
+     spare, and every two-column layout (.modal-columns, used by the
+     Update Character Sheet modal and every page of the Create Character
+     wizard - Class/Species's field+info-panel split and Abilities'
+     field+Passive-Senses/Saves/Skills split) stacks into one column,
+     info/secondary panel below the primary fields. */
+  .action-modal-overlay {
+    align-items: stretch;
+    justify-content: stretch;
+  }
+  .action-modal {
+    width: 100%;
+    max-width: none;
+    max-height: 100vh;
+    height: 100%;
+    border-radius: 0;
+    padding: 14px;
+    box-sizing: border-box;
+  }
+  .action-modal.add-item-modal,
+  .action-modal.action-modal-info,
+  .action-modal-wide,
+  .action-modal-feature {
+    width: 100% !important;
+    max-width: none !important;
+  }
+  .modal-columns {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .modal-columns > .modal-col:first-child,
+  .modal-columns > .modal-col:nth-child(2) {
+    flex: 1 1 auto;
+    max-width: 100%;
+  }
+
+  /* ---- Bigger touch targets: checkboxes/buttons sized for a mouse
+     cursor are easy to miss with a fingertip. */
+  .action-modal button,
+  .dnd-sheet button {
+    min-height: 34px;
+    padding: 6px 12px;
+  }
+
+  /* "Character Details" tab row (Actions/Spells/Inventory/Features/Notes) -
+     five buttons on one BUTTON[...] line that, at the touch-target size
+     above, don't fit a phone's width and wrap into an uneven 3-then-2
+     pattern with each button sized to its own label. Turn their paragraph
+     into a wrapping flex row and give every button an equal share instead,
+     so they line up into a clean, evenly-sized grid regardless of label
+     length. !important beats the general button rule just above. */
+  .dnd-sheet .callout[data-callout="details"] .callout-content > p:has(button) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .dnd-sheet .callout[data-callout="details"] .callout-content > p:has(button) button {
+    flex: 1 1 30%;
+    min-width: 0;
+    min-height: 32px !important;
+    padding: 6px 4px !important;
+    margin: 0 !important;
+    font-size: 0.78em;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .checklist-item input[type="checkbox"],
+  .save-edit-row input[type="checkbox"],
+  .ability-edit-row input[type="checkbox"],
+  .skill-edit-row input[type="checkbox"],
+  .action-modal-row input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+  }
+  .checklist-box {
+    max-height: 160px;
+  }
+
+  /* Exhaustion tracker (Conditions tab) - a label plus 6 checkboxes on one
+     .spell-slots-row. At this width the row didn't have enough space for
+     both, and since flex children shrink by default, "Exhaustion" itself
+     was squeezed and broke mid-word ("Exhaustio"/"n") instead of the row
+     just wrapping. Force the label onto its own full-width line (flex-basis
+     100%) so all 6 checkboxes always flow together onto one clean line
+     underneath it, rather than splitting checkboxes across two lines
+     depending on how much room the label happened to leave. */
+  .dnd-sheet .exhaustion-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .dnd-sheet .exhaustion-row .spell-slots-label {
+    white-space: nowrap;
+    flex: 1 0 100%;
+  }
+
+  /* ================================================================
+     D&D Beyond-style mobile navigation (2026-09-22)
+     Below this point: the persistent header + menu sheet built by
+     MobileNavTracker, and the page-visibility rules that make tapping a
+     menu item show only that section. Nothing here changes what DOM
+     exists (main.js already renders every callout on every load,
+     desktop included) - it only changes which of those callouts this
+     media query lets through, via whichever `mobile-page-<key>` class
+     is currently in the note's own cssclasses (written by
+     MobileNavTracker.setPage(), the same mechanism the existing
+     tab-actions/tab-spells/etc. classes already use above). ================================================================ */
+
+  .dnd-sheet .mobile-nav-root {
+    display: block;
+  }
+
+  /* ---- Persistent header ---- */
+  .dnd-sheet .mobile-nav-header {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    background: var(--dnd-card, #23262f);
+    border: 1px solid var(--dnd-border, #383c48);
+    border-radius: 10px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+  .dnd-sheet .mobile-nav-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 2px solid var(--dnd-accent, #c9a24b);
+    line-height: 1.05;
+  }
+  .dnd-sheet .mobile-nav-stat-value {
+    font-weight: 700;
+    font-size: 0.95em;
+  }
+  .dnd-sheet .mobile-nav-stat-label {
+    font-size: 0.55em;
+    opacity: 0.75;
+    letter-spacing: 0.04em;
+  }
+  .dnd-sheet .mobile-nav-portrait {
+    position: relative;
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+  }
+  .dnd-sheet .mobile-nav-portrait img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+    border: 2px solid var(--dnd-border, #383c48);
+  }
+  .dnd-sheet .mobile-nav-portrait-fallback {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    border-radius: 50%;
+    border: 2px solid var(--dnd-border, #383c48);
+    background: var(--dnd-bg, #14161d);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 1em;
+    color: var(--dnd-accent, #c9a24b);
+  }
+  /* Heroic Inspiration: a small star badge, not a bare checkbox - filled
+     gold + a soft glow when active, a hollow grey outline star when not,
+     so what it does (and whether it's on) reads at a glance without
+     needing the title tooltip (which touch users never see anyway). */
+  .dnd-sheet .mobile-nav-hi-toggle {
+    position: absolute;
+    bottom: -4px;
+    right: -4px;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    margin: 0;
+    box-sizing: border-box;
+    border-radius: 50%;
+    border: 1px solid var(--dnd-border, #383c48);
+    background: var(--dnd-card, #23262f);
+    color: var(--dnd-text-muted, #8a8f9c);
+    font-size: 12px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+  .dnd-sheet .mobile-nav-hi-toggle-active {
+    background: var(--dnd-accent, #c9a24b);
+    border-color: var(--dnd-accent, #c9a24b);
+    color: #2a2100;
+    box-shadow: 0 0 6px var(--dnd-accent, #c9a24b);
+  }
+  .dnd-sheet .mobile-nav-hp {
+    flex: 1 1 130px;
+    min-width: 90px;
+    cursor: pointer;
+  }
+  .dnd-sheet .mobile-nav-hp-text {
+    font-size: 0.8em;
+    font-weight: 600;
+    margin-bottom: 3px;
+    white-space: nowrap;
+  }
+  .dnd-sheet .mobile-nav-hp-bar {
+    width: 100%;
+    height: 7px;
+    border-radius: 4px;
+    background: var(--dnd-bg, #14161d);
+    border: 1px solid var(--dnd-border, #383c48);
+    overflow: hidden;
+  }
+  .dnd-sheet .mobile-nav-hp-bar-fill {
+    height: 100%;
+    background: #b5442e;
+    transition: width 0.2s ease;
+  }
+  /* Shared by the Overview and Conditions header buttons - both are
+     header-reachable pages, same tier as the HP bar just before them, so
+     they get matching pill styling. The header itself wraps (see
+     .mobile-nav-header's flex-wrap above), so on a narrow phone these two
+     drop to their own second line under AC/Initiative/portrait/HP rather
+     than getting squeezed unreadably thin. */
+  .dnd-sheet .mobile-nav-header-btn {
+    flex: 0 0 auto;
+    font-size: 0.75em;
+    padding: 6px 8px;
+    white-space: nowrap;
+  }
+
+  /* ---- Current-page bar ---- */
+  .dnd-sheet .mobile-nav-pagebar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    background: var(--dnd-bg, #14161d);
+    border: 1px solid var(--dnd-border, #383c48);
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    font-weight: 600;
+    font-size: 0.95em;
+    text-align: left;
+  }
+  .dnd-sheet .mobile-nav-pagebar-chevron {
+    opacity: 0.75;
+  }
+
+  /* ---- Full-screen "jump to" menu sheet ---- */
+  .mobile-nav-menu-overlay {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0, 0, 0, 0.55);
+    align-items: flex-end;
+  }
+  .mobile-nav-menu-sheet {
+    width: 100%;
+    max-height: 85vh;
+    overflow-y: auto;
+    background: var(--dnd-card, #23262f);
+    border-radius: 14px 14px 0 0;
+    padding: 14px;
+    box-sizing: border-box;
+  }
+  .mobile-nav-menu-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .mobile-nav-menu-title {
+    font-weight: 700;
+  }
+  .mobile-nav-menu-close {
+    min-height: 30px;
+    padding: 4px 10px;
+  }
+  .mobile-nav-menu-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .mobile-nav-menu-item {
+    text-align: left;
+    padding: 12px 14px;
+    border-radius: 8px;
+    background: var(--dnd-bg, #14161d);
+    border: 1px solid var(--dnd-border, #383c48);
+  }
+  .mobile-nav-menu-item-active {
+    border-color: var(--dnd-accent, #c9a24b);
+    color: var(--dnd-accent, #c9a24b);
+  }
+
+  /* ---- Page visibility: hide every page-controlled callout by default,
+     then reveal only the ones the active mobile-page-<key> class calls
+     for. A callout not listed under any page here (Row/Colstack/Column
+     wrappers, etc.) is an invisible layout-only element already (see the
+     [!row]/[!colstack] rules earlier in this file) so leaving it always
+     visible is harmless - only its actual content children are gated. */
+  .dnd-sheet.mobile-page-abilities .callout[data-callout="stat"],
+  .dnd-sheet.mobile-page-abilities .callout[data-callout="saves"],
+  .dnd-sheet.mobile-page-abilities .callout[data-callout="senses"],
+  .dnd-sheet.mobile-page-skills .callout[data-callout="skills"],
+  .dnd-sheet.mobile-page-actions .callout[data-callout="details"],
+  .dnd-sheet.mobile-page-inventory .callout[data-callout="details"],
+  .dnd-sheet.mobile-page-spells .callout[data-callout="details"],
+  .dnd-sheet.mobile-page-features .callout[data-callout="details"],
+  .dnd-sheet.mobile-page-charbackground .callout[data-callout="details"],
+  .dnd-sheet.mobile-page-notes .callout[data-callout="details"],
+  .dnd-sheet.mobile-page-creatures .callout[data-callout="details"],
+  .dnd-sheet.mobile-page-speed .callout[data-callout="combat"],
+  .dnd-sheet.mobile-page-speed .callout[data-callout="defenses"],
+  .dnd-sheet.mobile-page-proficiencies .callout[data-callout="profbonus"],
+  .dnd-sheet.mobile-page-background .callout[data-callout="charinfo"],
+  .dnd-sheet.mobile-page-hp .callout[data-callout="hp"],
+  .dnd-sheet.mobile-page-conditions .callout[data-callout="conditions"] {
+    display: block !important;
+  }
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="stat"],
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="saves"],
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="senses"],
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="skills"],
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="details"],
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="combat"],
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="defenses"],
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="profbonus"],
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="charinfo"],
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="hp"],
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="conditions"] {
+    display: none;
+  }
+
+  /* Actions/Spells/Inventory/Features/Notes each get their own page in the
+     nav now (mobile-page-actions, mobile-page-spells, etc. above all
+     reveal the same shared [!details] callout, gated to just their own
+     .tab-panel by the tab-actions/tab-spells/etc. classes MobileNavTracker
+     sets alongside mobile_page). That makes the "CHARACTER DETAILS" title
+     and the Actions/Spells/Inventory/Features/Notes button row inside it
+     pure duplicates of the page you're already on via the top nav bar -
+     remove both so each page reads as its own standalone screen instead of
+     a mini tab-switcher nested inside another one. Desktop, and any
+     character that hasn't gotten the mobile-nav-tracker block yet (no
+     mobile-page-* class), keep the title and switcher exactly as before -
+     that's still how they get from Actions to Spells there. */
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="details"] > .callout-title,
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="details"] .callout-content > p:has(button) {
+    display: none !important;
+  }
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="details"] > .callout-content {
+    padding-top: 4px !important;
+  }
+
+  /* The rule above only hides each individual content callout - it leaves
+     the invisible [!row]/[!colstack] WRAPPER around it in place, and that
+     wrapper still carries its own margin (see the [!row] rule near the top
+     of this file: margin: 14px 0). A row whose every child is hidden on
+     the current page (e.g. the Overview/Combat/HP row when Abilities is
+     showing - none of charinfo/combat/hp belongs there) was still taking
+     up its own vertical margin with nothing visible inside it, which is
+     the empty gap the user pointed out in a screenshot right above the
+     ability score cards. Collapse every [!row] wrapper by default once a
+     mobile-page-* class is active, then re-show only the ones that
+     actually contain something the current page displays - :has() also
+     reaches through [!colstack] to find Saves/Senses/Proficiency Bonus
+     nested a level deeper, matching the same :has() technique this file's
+     own charinfo/defenses equal-height rules already rely on. */
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="row"] {
+    display: none !important;
+    margin: 0 !important;
+  }
+  .dnd-sheet.mobile-page-abilities .callout[data-callout="row"]:has(.callout[data-callout="stat"], .callout[data-callout="saves"], .callout[data-callout="senses"]),
+  .dnd-sheet.mobile-page-skills .callout[data-callout="row"]:has(.callout[data-callout="skills"]),
+  .dnd-sheet.mobile-page-actions .callout[data-callout="row"]:has(.callout[data-callout="details"]),
+  .dnd-sheet.mobile-page-inventory .callout[data-callout="row"]:has(.callout[data-callout="details"]),
+  .dnd-sheet.mobile-page-spells .callout[data-callout="row"]:has(.callout[data-callout="details"]),
+  .dnd-sheet.mobile-page-features .callout[data-callout="row"]:has(.callout[data-callout="details"]),
+  .dnd-sheet.mobile-page-charbackground .callout[data-callout="row"]:has(.callout[data-callout="details"]),
+  .dnd-sheet.mobile-page-notes .callout[data-callout="row"]:has(.callout[data-callout="details"]),
+  .dnd-sheet.mobile-page-creatures .callout[data-callout="row"]:has(.callout[data-callout="details"]),
+  .dnd-sheet.mobile-page-speed .callout[data-callout="row"]:has(.callout[data-callout="combat"], .callout[data-callout="defenses"]),
+  .dnd-sheet.mobile-page-proficiencies .callout[data-callout="row"]:has(.callout[data-callout="profbonus"]),
+  .dnd-sheet.mobile-page-background .callout[data-callout="row"]:has(.callout[data-callout="charinfo"]),
+  .dnd-sheet.mobile-page-hp .callout[data-callout="row"]:has(.callout[data-callout="hp"]),
+  .dnd-sheet.mobile-page-conditions .callout[data-callout="row"]:has(.callout[data-callout="conditions"]) {
+    display: block !important;
+    margin: 14px 0 !important;
+  }
+
+  /* The generic [!row] rule above (the one forcing every direct row-child
+     to flex: 1 1 100%) was written for the old single long scrolling page,
+     where six full-width ability boxes stacked one per row was fine since
+     you'd scroll past them anyway. On the Abilities page of the new one-
+     section-at-a-time nav they ARE the whole screen, so stacking all six
+     made each one look huge and mostly empty. Once a mobile-page-* class
+     is present, put the six ability boxes back into a compact 3-per-row
+     grid instead, with smaller title/number text and less padding so they
+     read as a tight grid rather than dominating the page. Scoped to
+     [class*="mobile-page-"] so a character that hasn't gotten the
+     mobile-nav-tracker block yet keeps today's stacked layout unchanged. */
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="row"] > .callout-content > .callout[data-callout="stat"] {
+    flex: 1 1 30% !important;
+    min-width: 0 !important;
+    max-width: 32% !important;
+  }
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="stat"] .callout-title-inner {
+    font-size: 1.05em;
+  }
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="stat"] .stat-mod {
+    font-size: 1.3em;
+  }
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="stat"] .stat-score {
+    font-size: 0.85em;
+  }
+  .dnd-sheet[class*="mobile-page-"] .callout[data-callout="stat"] > .callout-content {
+    padding: 0 4px 6px !important;
+  }
+}
