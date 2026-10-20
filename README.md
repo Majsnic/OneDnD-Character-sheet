@@ -1,4 +1,4 @@
-# D&D 2024 Character Sheet
+# One DnD Character Sheet
 
 An Obsidian plugin that renders a fully interactive D&D 2024 character sheet directly inside your vault — styled like D&D Beyond, but running entirely on your own Markdown notes.
 
