@@ -1,7 +1,7 @@
 {
   "id": "onednd-character-sheet",
   "name": "One DnD Character Sheet",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "minAppVersion": "1.0.0",
   "description": "Build and manage a fully automated Dungeons & Dragons 2024 character sheet directly inside your Vault.",
   "author": "Majsnic",
