@@ -1,4 +1,4 @@
-const { Plugin, MarkdownRenderChild, getAllTags, Notice, Modal, Setting, PluginSettingTab, TFile, TFolder, MarkdownRenderer, requestUrl } = require("obsidian");
+const { Plugin, MarkdownRenderChild, getAllTags, Notice, Modal, Setting, PluginSettingTab, TFile, TFolder, MarkdownRenderer, requestUrl, Platform } = require("obsidian");
 
 // Short mechanical reminders, standard 5e 2024 rules - same summaries as
 // the previous dataviewjs version. zeroSpeed marks conditions that
@@ -58,18 +58,79 @@ const dataFolderIdInFlight = new Map();
 // "+ Add Species Traits"/"+ Insert Homebrew Feature" buttons) without
 // editing this file by hand. Synced by syncHomebrewFromSettings(), called
 // from loadSettings() and every time a homebrew entry is added/removed in
-// the settings tab. "Race" and "Ancestry" are the same concept in this
-// plugin (see RACE_TRAITS' own "species/ancestry" wording) - there's only
-// one homebrewRaces list, not two overlapping ones.
+// the settings tab. "Race" (the base species + its own traits, via the
+// Race wizard/homebrewRaces) and "Ancestry" (an optional sub-choice
+// attached to a specific race - built-in or homebrew - via the Ancestry
+// wizard/homebrewAncestries) are two separate wizards/lists: an Ancestry
+// contributes one synthetic trait (see getRaceTraits) to whichever race
+// it names, with a "choice" mechanic (Black/Blue/Brass dragon type, Drow/
+// High Elf/Wood Elf lineage, etc.) - same idea as the built-in
+// RACE_TRAIT_CHOICES table (Draconic Ancestry, Elven Lineage, Fiendish
+// Legacy...), just author-defined instead of hardcoded. See
+// findRaceSubChoiceTrait/resolveRaceSubChoice for how a homebrew Ancestry
+// gets the same "dedicated dropdown right after Race" treatment those
+// built-in ones get, not just a generic Features-tab picker.
 let HOMEBREW = {
-  classes: [], subclasses: [], races: [], features: [],
+  classes: [], subclasses: [], races: [], ancestries: [], features: [], backgrounds: [],
   choiceDefs: {}, resourceDefs: {}, statBonusDefs: {}, defenseDefs: {}, actionGrantDefs: {},
 };
 // Hoisted to module scope (out of buildCharSheetFields, the only place
 // that used to declare it) so the Settings tab's Homebrew Content ->
 // Subclasses section can also read the built-in class list, for its
 // "which class does this subclass belong to" dropdown.
-const CLASS_OPTIONS = ["Barbarian","Bard","Cleric","Druid","Fighter","Monk","Paladin","Ranger","Rogue","Sorcerer","Warlock","Wizard"];
+const CLASS_OPTIONS = ["Artificer","Barbarian","Bard","Cleric","Druid","Fighter","Monk","Paladin","Ranger","Rogue","Sorcerer","Warlock","Wizard"];
+// Same hoisting rationale as CLASS_OPTIONS above, but for races - the
+// Settings tab's Homebrew Content -> Ancestries section needs this list
+// (plus current homebrewRaces names) for its "which race does this
+// ancestry belong to" dropdown. buildCharSheetFields below uses this same
+// module-level constant instead of declaring its own local copy.
+const RACE_OPTIONS = ["Aarakocra","Aasimar","Astral Elf","Autognome","Bugbear","Centaur","Changeling","Deep Gnome","Dhampir","Dragonborn","Duergar","Dwarf","Eladrin","Elf","Fairy","Firbolg","Genasi","Giff","Githyanki","Githzerai","Gnome","Goblin","Goliath","Grung","Hadozee","Halfling","Half-Elf","Half-Orc","Harengon","Hexblood","Hill Dwarf","Hobgoblin","Human","Kalashtar","Kenku","Kobold","Leonin","Lizardfolk","Locathah","Loxodon","Minotaur","Mountain Dwarf","Orc","Owlfolk","Plasmoid","Reborn","Satyr","Sea Elf","Shifter","Simic Hybrid","Tabaxi","Thri-kreen","Tiefling","Tortle","Triton","Vedalken","Verdan","Warforged","Yuan-Ti Pureblood"];
+// SRD 5.2.1 (Creative Commons) scope, used by the Create Character wizard's
+// Home page "SRD Only" content level. Names match this file's own existing
+// spelling exactly (verified against RACE_OPTIONS/CLASS_OPTIONS/SUBCLASS_MAP/
+// CANTRIP_CLASS_LIST+SPELL_CLASS_LIST).
+const SRD_RACES = ["Dragonborn", "Dwarf", "Elf", "Gnome", "Goliath", "Halfling", "Human", "Orc", "Tiefling"];
+const SRD_CLASSES = ["Barbarian", "Bard", "Cleric", "Druid", "Fighter", "Monk", "Paladin", "Ranger", "Rogue", "Sorcerer", "Warlock", "Wizard"];
+const SRD_SUBCLASS_BY_CLASS = {
+  Barbarian: "Berserker", Bard: "College of Lore", Cleric: "Life Domain", Druid: "Circle of the Land",
+  Fighter: "Champion", Monk: "Open Hand", Paladin: "Devotion", Ranger: "Hunter", Rogue: "Thief",
+  Sorcerer: "Draconic Bloodline", Warlock: "Fiend", Wizard: "School of Evocation",
+};
+// SRD 5.2.1 background list (Player's Handbook backgrounds released under
+// the Creative Commons license) - these four names match BACKGROUND_DATA_2024
+// exactly, so background visibility can be filtered with confidence (see
+// isBackgroundVisible in openNewCharacterModal).
+const SRD_BACKGROUNDS = ["Acolyte", "Criminal", "Sage", "Soldier"];
+const SRD_SPELL_NAMES = new Set(["Acid Splash", "Aid", "Alarm", "Alter Self", "Animal Friendship", "Animal Messenger", "Animal Shapes", "Animate Dead", "Animate Objects", "Antilife Shell", "Antimagic Field", "Antipathy/Sympathy", "Arcane Eye", "Arcane Lock", "Astral Projection", "Augury", "Aura of Life", "Awaken", "Bane", "Banishment", "Barkskin", "Beacon of Hope", "Befuddlement", "Bestow Curse", "Bigby's Hand", "Blade Barrier", "Bless", "Blight", "Blindness/Deafness", "Blink", "Blur", "Burning Hands", "Call Lightning", "Calm Emotions", "Chain Lightning", "Charm Monster", "Charm Person", "Chill Touch", "Chromatic Orb", "Circle of Death", "Clairvoyance", "Clone", "Cloudkill", "Color Spray", "Command", "Commune", "Commune with Nature", "Comprehend Languages", "Compulsion", "Cone of Cold", "Confusion", "Conjure Animals", "Conjure Celestial", "Conjure Elemental", "Conjure Fey", "Conjure Minor Elementals", "Conjure Woodland Beings", "Contact Other Plane", "Contagion", "Contingency", "Continual Flame", "Control Water", "Control Weather", "Counterspell", "Create Food and Water", "Create Undead", "Create or Destroy Water", "Creation", "Cure Wounds", "Dancing Lights", "Darkness", "Darkvision", "Daylight", "Death Ward", "Delayed Blast Fireball", "Demiplane", "Detect Evil and Good", "Detect Magic", "Detect Poison and Disease", "Detect Thoughts", "Dimension Door", "Disguise Self", "Disintegrate", "Dispel Evil and Good", "Dispel Magic", "Dissonant Whispers", "Divination", "Divine Favor", "Divine Smite", "Divine Word", "Dominate Beast", "Dominate Monster", "Dominate Person", "Dragon's Breath", "Drawmij's Instant Summons", "Dream", "Druidcraft", "Earthquake", "Eldritch Blast", "Elementalism", "Enhance Ability", "Enlarge/Reduce", "Ensnaring Strike", "Entangle", "Enthrall", "Etherealness", "Evard's Black Tentacles", "Expeditious Retreat", "Eyebite", "Fabricate", "Faerie Fire", "False Life", "Fear", "Feather Fall", "Find Familiar", "Find Steed", "Find Traps", "Find the Path", "Finger of Death", "Fire Bolt", "Fire Shield", "Fire Storm", "Fireball", "Flame Blade", "Flame Strike", "Flaming Sphere", "Flesh to Stone", "Fly", "Fog Cloud", "Forbiddance", "Forcecage", "Foresight", "Freedom of Movement", "Gaseous Form", "Gate", "Geas", "Gentle Repose", "Giant Insect", "Glibness", "Globe of Invulnerability", "Glyph of Warding", "Goodberry", "Grease", "Greater Invisibility", "Greater Restoration", "Guardian of Faith", "Guards and Wards", "Guidance", "Guiding Bolt", "Gust of Wind", "Hallow", "Hallucinatory Terrain", "Harm", "Haste", "Heal", "Healing Word", "Heat Metal", "Hellish Rebuke", "Heroes' Feast", "Heroism", "Hex", "Hold Monster", "Hold Person", "Holy Aura", "Hunter's Mark", "Hypnotic Pattern", "Ice Knife", "Ice Storm", "Identify", "Illusory Script", "Imprisonment", "Incendiary Cloud", "Inflict Wounds", "Insect Plague", "Invisibility", "Jump", "Knock", "Legend Lore", "Leomund's Secret Chest", "Leomund's Tiny Hut", "Lesser Restoration", "Levitate", "Light", "Lightning Bolt", "Locate Animals or Plants", "Locate Creature", "Locate Object", "Longstrider", "Mage Armor", "Mage Hand", "Magic Circle", "Magic Jar", "Magic Missile", "Magic Mouth", "Magic Weapon", "Major Image", "Mass Cure Wounds", "Mass Heal", "Mass Healing Word", "Mass Suggestion", "Maze", "Meld into Stone", "Melf's Acid Arrow", "Mending", "Message", "Meteor Swarm", "Mind Blank", "Mind Spike", "Minor Illusion", "Mirage Arcane", "Mirror Image", "Mislead", "Misty Step", "Modify Memory", "Moonbeam", "Mordenkainen's Faithful Hound", "Mordenkainen's Magnificent Mansion", "Mordenkainen's Private Sanctum", "Mordenkainen's Sword", "Move Earth", "Nondetection", "Nystul's Magic Aura", "Otiluke's Freezing Sphere", "Otiluke's Resilient Sphere", "Otto's Irresistible Dance", "Pass without Trace", "Passwall", "Phantasmal Force", "Phantasmal Killer", "Phantom Steed", "Planar Ally", "Planar Binding", "Plane Shift", "Plant Growth", "Poison Spray", "Polymorph", "Power Word Heal", "Power Word Kill", "Power Word Stun", "Prayer of Healing", "Prestidigitation", "Prismatic Spray", "Prismatic Wall", "Produce Flame", "Programmed Illusion", "Project Image", "Protection from Energy", "Protection from Evil and Good", "Protection from Poison", "Purify Food and Drink", "Raise Dead", "Rary's Telepathic Bond", "Ray of Enfeeblement", "Ray of Frost", "Ray of Sickness", "Regenerate", "Reincarnate", "Remove Curse", "Resistance", "Resurrection", "Reverse Gravity", "Revivify", "Rope Trick", "Sacred Flame", "Sanctuary", "Scorching Ray", "Scrying", "Searing Smite", "See Invisibility", "Seeming", "Sending", "Sequester", "Shapechange", "Shatter", "Shield", "Shield of Faith", "Shillelagh", "Shining Smite", "Shocking Grasp", "Silence", "Silent Image", "Simulacrum", "Sleep", "Sleet Storm", "Slow", "Sorcerous Burst", "Spare the Dying", "Speak with Animals", "Speak with Dead", "Speak with Plants", "Spider Climb", "Spike Growth", "Spirit Guardians", "Spiritual Weapon", "Starry Wisp", "Stinking Cloud", "Stone Shape", "Stoneskin", "Storm of Vengeance", "Suggestion", "Summon Dragon", "Sunbeam", "Sunburst", "Symbol", "Tasha's Hideous Laughter", "Telekinesis", "Teleport", "Teleportation Circle", "Tenser's Floating Disk", "Thaumaturgy", "Thunderwave", "Time Stop", "Tongues", "Transport via Plants", "Tree Stride", "True Polymorph", "True Resurrection", "True Seeing", "True Strike", "Tsunami", "Unseen Servant", "Vampiric Touch", "Vicious Mockery", "Vitriolic Sphere", "Wall of Fire", "Wall of Force", "Wall of Ice", "Wall of Stone", "Wall of Thorns", "Warding Bond", "Water Breathing", "Water Walk", "Web", "Weird", "Wind Walk", "Wind Wall", "Wish", "Word of Recall", "Zone of Truth"]);
+// The item_category/Rarity enums from claude/item-schema.md (the project's
+// item-note frontmatter schema doc) - shared by openHomebrewItemWizard and
+// the Settings tab's Homebrew Content -> Items section. Folder-per-rarity
+// under settings.itemLibraryFolder mirrors that schema's existing
+// Předměty/<Rarity>/ convention exactly (see createHomebrewItemNote).
+const ITEM_CATEGORIES = ["Weapon","Armor","Shield","Ring","Rod","Staff","Wand","Wondrous Item","Potion","Scroll","Ammunition","Crafting Material","Adventuring Gear"];
+const ITEM_RARITIES = ["Common","Uncommon","Rare","Very Rare","Legendary","Artifact"];
+const ITEM_CATEGORIES_NEEDING_BASE_NAME = ["Weapon", "Armor", "Shield"];
+// Monster wizard option lists, matching this vault's own bestiary
+// conventions exactly (see buildHomebrewMonsterNote/openHomebrewMonsterWizard
+// below) - MONSTER_TYPES mirrors "04. Kniha příšer/<Type>/"'s own folder
+// names (though homebrew monsters themselves all file flat into one
+// "Homebrew Příšery"-style folder regardless of type, per vault-map.md).
+const MONSTER_SIZES = ["Tiny", "Small", "Medium", "Large", "Huge", "Gargantuan"];
+const MONSTER_TYPES = ["Aberration","Beast","Celestial","Construct","Dragon","Elemental","Fey","Fiend","Giant","Humanoid","Monstrosity","Ooze","Plant","Undead"];
+const MONSTER_SAVE_ABILITIES = ["Str", "Dex", "Con", "Int", "Wis", "Cha"];
+// Feat categories, matching the Rysy (Feats) library's own four subfolders
+// exactly (see buildHomebrewFeatNote/createHomebrewFeatNote) - each maps to
+// a Czech/English "**Typ:**" label pair and a subfolder under
+// settings.featLibraryFolder. Keyed here by the plain English category name
+// getAllFeatNotes already derives from a note's own "**Typ:**" line (see
+// that function's category detection), so a homebrew feat's category is
+// recognized identically to how it would be from any hand-written note.
+const FEAT_CATEGORIES = {
+  General: { folder: "Obecné rysy (General Feats)", labelCz: "Obecný rys", labelEn: "General Feat" },
+  "Fighting Style": { folder: "Bojové rysy (Fighting Style Feats)", labelCz: "Rys bojového stylu", labelEn: "Fighting Style Feat" },
+  "Epic Boon": { folder: "Epické dary (Epic Boons)", labelCz: "Epický dar", labelEn: "Epic Boon" },
+  Origin: { folder: "Počáteční rysy (Origin Feats)", labelCz: "Rys z počátku", labelEn: "Origin Feat" },
+};
 // Turns every optional `mechanic` object attached to a homebrew subclass
 // feature / race trait / standalone feature (see the Homebrew Content
 // wizards' renderMechanicEditor - a mechanic is either null, a
@@ -196,6 +257,19 @@ function buildHomebrewMechanicDefs() {
   for (const race of HOMEBREW.races) {
     for (const trait of race.traits || []) registerMechanic(trait.name, trait.mechanic, trait.description);
   }
+  // Each homebrew Ancestry (see homebrewAncestries/openHomebrewAncestryWizard)
+  // is registered as a plain "choice" mechanic under its own traitName -
+  // same shape/handling as a built-in RACE_TRAIT_CHOICES entry (Draconic
+  // Ancestry, Elven Lineage, etc.), just author-defined. This is what makes
+  // findFeatureChoiceDef's existing HOMEBREW.choiceDefs fallback pick it up
+  // on the Features tab; findRaceSubChoiceTrait/resolveRaceSubChoice below
+  // check the same choiceDefs map so it also gets the Page 1 "dropdown
+  // right after Race" treatment, not just the generic picker.
+  for (const anc of HOMEBREW.ancestries) {
+    const options = (anc.options || []).filter((o) => o && String(o.label || "").trim());
+    if (!anc.traitName || !options.length) continue;
+    registerMechanic(anc.traitName, { type: "choice", count: 1, options, hint: anc.hint || "" }, anc.description);
+  }
   for (const feat of HOMEBREW.features) registerMechanic(feat.name, feat.mechanic, feat.description);
   return { choiceDefs, resourceDefs, statBonusDefs, defenseDefs, actionGrantDefs };
 }
@@ -235,7 +309,9 @@ function syncHomebrewFromSettings(settings) {
     classes: (settings && settings.homebrewClasses) || [],
     subclasses: (settings && settings.homebrewSubclasses) || [],
     races: (settings && settings.homebrewRaces) || [],
+    ancestries: (settings && settings.homebrewAncestries) || [],
     features: (settings && settings.homebrewFeatures) || [],
+    backgrounds: (settings && settings.homebrewBackgrounds) || [],
     choiceDefs: {},
     resourceDefs: {},
     statBonusDefs: {},
@@ -244,15 +320,214 @@ function syncHomebrewFromSettings(settings) {
   };
   Object.assign(HOMEBREW, buildHomebrewMechanicDefs());
 }
+// All book names currently in use across homebrew Classes/Subclasses/
+// Races/Ancestries/Backgrounds/Features - NOT Feats/Items, which create
+// real vault notes instead of wizard options) - see the Book field on each
+// of those wizards (openHomebrewClassWizard etc.). Used to populate the
+// Create Character wizard's "Use Homebrew Content" book dropdown (see
+// openNewCharacterModal). Always starts with "All", then "Homebrew" as the
+// catch-all bucket for any entry with no book set yet, then every actual
+// book name typed in so far, alphabetically - "Homebrew" itself is never
+// duplicated even if someone names an actual book that.
+function getHomebrewBookOptions() {
+  const books = new Set();
+  for (const list of [HOMEBREW.classes, HOMEBREW.subclasses, HOMEBREW.races, HOMEBREW.ancestries, HOMEBREW.backgrounds, HOMEBREW.features]) {
+    for (const entry of list) {
+      const book = (entry.book || "").trim();
+      if (book && book !== "Homebrew") books.add(book);
+    }
+  }
+  return ["All", "Homebrew", ...Array.from(books).sort((a, b) => a.localeCompare(b))];
+}
+// Display label for one homebrew entry's Book field, used by the Settings
+// tab's per-entry .setDesc() lines so an untagged entry visibly shows which
+// bucket it falls into ("Homebrew") rather than looking blank.
+function getHomebrewBookLabel(entry) {
+  const book = (entry && entry.book || "").trim();
+  return book || "Homebrew";
+}
+
+// --- Per-book homebrew data files (settings.homebrewDataFolder) ---
+// By default all six Homebrew Content lists (Classes/Subclasses/Races/
+// Ancestries/Features/Backgrounds) live as plain arrays inside this
+// plugin's own data.json, same as every other setting. When the user
+// points homebrewDataFolder at a folder, this block takes over instead:
+// every entry's own Book field (the same one already shown via
+// getHomebrewBookLabel above) decides which "<homebrewDataFolder>/<Book>/
+// <Book>.json" file it's filed under (the file is named after the book,
+// not a generic fixed name), so each sourcebook's additions become one
+// small, independently readable/diffable JSON file rather than everything
+// being interleaved inside one monolithic array.
+// loadSettings() reads these files back in (see readHomebrewBookFiles)
+// and saveSettings() rewrites them (see writeHomebrewBookFiles) every
+// time any Homebrew Content edit is persisted - both are a full
+// regroup/rewrite rather than a diff, since this data is at most a few
+// hundred KB even across dozens of sourcebooks and a full rewrite can
+// never drift out of sync with what Settings actually shows.
+//
+// This deliberately uses app.vault.adapter (read/write/mkdir/list/exists
+// on plain path strings) rather than the app.vault/TFile/TFolder API used
+// everywhere else in this file - the adapter is the lower-level layer
+// Obsidian itself uses for data.json, and unlike app.vault it can reach
+// paths under .obsidian/ (not "vault content", so invisible to app.vault
+// entirely). That's intentional here: homebrewDataFolder's own default
+// points inside this plugin's .obsidian/plugins/.../ folder, right next
+// to data.json, so the split-out files stay exactly as hidden from the
+// File Explorer/search/other note-scanning plugins as data.json already
+// is - nothing here is meant to be browsed as vault content.
+const HOMEBREW_LIST_KEYS = ["homebrewClasses", "homebrewSubclasses", "homebrewRaces", "homebrewAncestries", "homebrewFeatures", "homebrewBackgrounds"];
+
+function emptyHomebrewBookData() {
+  const data = {};
+  for (const key of HOMEBREW_LIST_KEYS) data[key] = [];
+  return data;
+}
+
+// Turns a Book name into a filesystem-safe folder name. Keeps it close to
+// the literal title (diacritics and all) just swapping out the handful of
+// characters Windows paths forbid - purely for readability if anyone ever
+// looks at this folder directly, since nothing reads the folder name back
+// as data (each file's own entries still carry their real Book field).
+function slugifyHomebrewBookFolder(name) {
+  const base = (name && String(name).trim()) || "Homebrew";
+  return (
+    base
+      .replace(/:\s*/g, " - ") // "Creed's Codex: Arcane..." -> "Creed's Codex - Arcane..."
+      .replace(/[\\/*?"<>|]/g, "-") // remaining characters Windows paths forbid
+      .replace(/\s+/g, " ")
+      .trim() || "Homebrew"
+  );
+}
+
+// mkdir isn't guaranteed to create missing parent folders on every
+// adapter implementation, so this walks the path one segment at a time
+// instead of assuming recursive behavior.
+async function adapterMkdirp(adapter, path) {
+  const segments = path.split("/").filter(Boolean);
+  let cur = "";
+  for (const seg of segments) {
+    cur = cur ? `${cur}/${seg}` : seg;
+    if (!(await adapter.exists(cur))) {
+      await adapter.mkdir(cur).catch(() => {});
+    }
+  }
+}
+
+// adapter.list()'s folders/files entries are documented as full paths,
+// but this normalizes defensively (deriving the name as the last path
+// segment, and rebuilding the full path under rootFolder if a bare name
+// ever comes back instead) so it isn't relying on exactly which shape a
+// given adapter happens to return.
+async function listHomebrewBookFolders(adapter, rootFolder) {
+  if (!rootFolder || !(await adapter.exists(rootFolder))) return [];
+  const listing = await adapter.list(rootFolder);
+  return (listing.folders || []).map((f) => {
+    const name = f.split("/").pop();
+    const path = f.includes("/") ? f : `${rootFolder}/${f}`;
+    return { name, path };
+  });
+}
+
+// Reverse of writeHomebrewBookFiles below - scans every book folder under
+// homebrewDataFolder for its JSON file and concatenates their six lists
+// back into one flat array per type, the same shape loadSettings() used to
+// read straight out of data.json. Each folder's file is expected to be
+// named "<Book>.json" (matching the folder name) so the file itself is
+// self-identifying if anyone browses the adapter-level folder directly -
+// but the legacy fixed name "homebrew.json" is also checked as a fallback,
+// so a folder that hasn't been touched since the older naming convention
+// still reads correctly instead of silently losing that book's content. A
+// book file that fails to parse is skipped (logged, plus a Notice) rather
+// than aborting the whole load, so one bad file can't take down every
+// other book's content or the character sheet wizards that read HOMEBREW
+// off the merged result.
+async function readHomebrewBookFiles(adapter, rootFolder) {
+  const merged = emptyHomebrewBookData();
+  const folders = await listHomebrewBookFolders(adapter, rootFolder);
+  for (const folder of folders) {
+    const namedPath = `${folder.path}/${folder.name}.json`;
+    const legacyPath = `${folder.path}/homebrew.json`;
+    const filePath = (await adapter.exists(namedPath)) ? namedPath : legacyPath;
+    if (!(await adapter.exists(filePath))) continue;
+    try {
+      const raw = await adapter.read(filePath);
+      const data = JSON.parse(raw);
+      for (const key of HOMEBREW_LIST_KEYS) {
+        if (Array.isArray(data[key])) merged[key].push(...data[key]);
+      }
+    } catch (e) {
+      console.error(`[D&D 2024 Character Sheet] Failed to parse homebrew book file at "${filePath}" - skipping this book:`, e);
+      new Notice(`D&D 2024 Character Sheet: couldn't read homebrew data for "${folder.name}" (see console) - that book's content won't show up until it's fixed.`);
+    }
+  }
+  return merged;
+}
+
+// Regroups the plugin's six in-memory homebrew lists by each entry's own
+// Book field and writes one <homebrewDataFolder>/<Book>/<Book>.json per
+// book - the file itself is now named after the book (matching the folder
+// it lives in), not a generic "homebrew.json", so the source is visible
+// from the filename alone. A book folder that no longer has any entries
+// (everything in it was edited to a different Book, or deleted) is left in
+// place but its file is rewritten to the empty six-list shape, rather than
+// being auto-deleted - so a user who wants to clean up an empty book
+// folder does it themselves instead of the plugin silently removing one.
+async function writeHomebrewBookFiles(adapter, settings) {
+  const rootFolder = (settings.homebrewDataFolder || "").trim();
+  if (!rootFolder) return;
+
+  const byBook = new Map(); // folder name -> emptyHomebrewBookData()-shaped object
+  for (const key of HOMEBREW_LIST_KEYS) {
+    for (const entry of settings[key] || []) {
+      const folderName = slugifyHomebrewBookFolder(getHomebrewBookLabel(entry));
+      if (!byBook.has(folderName)) byBook.set(folderName, emptyHomebrewBookData());
+      byBook.get(folderName)[key].push(entry);
+    }
+  }
+
+  await adapterMkdirp(adapter, rootFolder);
+
+  const writeOne = async (folderName, data) => {
+    const folderPath = `${rootFolder}/${folderName}`;
+    await adapterMkdirp(adapter, folderPath);
+    const filePath = `${folderPath}/${folderName}.json`;
+    const json = JSON.stringify(data, null, 2);
+    const current = (await adapter.exists(filePath)) ? await adapter.read(filePath) : null;
+    if (current !== json) await adapter.write(filePath, json);
+
+    // One-time cleanup: a folder written under the older fixed-name
+    // convention still has a "homebrew.json" sitting alongside the new
+    // "<Book>.json" - remove it now that this folder's content lives under
+    // its proper name, so the two never drift out of sync with each other.
+    const legacyPath = `${folderPath}/homebrew.json`;
+    if (legacyPath !== filePath && (await adapter.exists(legacyPath))) {
+      await adapter.remove(legacyPath).catch(() => {});
+    }
+  };
+
+  for (const [folderName, data] of byBook.entries()) {
+    await writeOne(folderName, data);
+  }
+  const existingBookFolders = await listHomebrewBookFolders(adapter, rootFolder);
+  for (const folder of existingBookFolders) {
+    if (!byBook.has(folder.name)) await writeOne(folder.name, emptyHomebrewBookData());
+  }
+}
 // Looks up a race/ancestry's traits, checking the built-in RACE_TRAITS
-// table first and falling back to a homebrew race of the same name -
-// used everywhere RACE_TRAITS[raceName] was read directly, so homebrew
-// races get identical treatment (Features-page seeding, Overview-tab
-// display, deriveSensesFromRace) to the built-in ones.
+// table first and falling back to a homebrew race of the same name - then
+// appends a synthetic trait for every homebrew Ancestry (see
+// homebrewAncestries/openHomebrewAncestryWizard) that names this race as
+// its parent, so an Ancestry "lands" on the sheet exactly like a real
+// trait would (Features-page seeding, Overview-tab display,
+// deriveSensesFromRace, findRaceSubChoiceTrait below), whether the parent
+// race is built-in or itself homebrew. Never mutates RACE_TRAITS/
+// HOMEBREW.races - always returns a fresh array.
 function getRaceTraits(raceName) {
-  if (RACE_TRAITS[raceName]) return RACE_TRAITS[raceName];
-  const hb = HOMEBREW.races.find((r) => r.name === raceName);
-  return (hb && hb.traits) || [];
+  const base = RACE_TRAITS[raceName] || ((HOMEBREW.races.find((r) => r.name === raceName) || {}).traits) || [];
+  const ancestryTraits = HOMEBREW.ancestries
+    .filter((a) => a && a.raceName === raceName && a.traitName)
+    .map((a) => ({ name: a.traitName, description: a.description || "" }));
+  return ancestryTraits.length ? base.concat(ancestryTraits) : base;
 }
 // Same idea as getRaceTraits above, but for a homebrew Subclass's own
 // leveled features (see the Homebrew Content > Subclasses wizard - each
@@ -295,6 +570,69 @@ const MECHANICAL_BODY_END_MARKER = "\n# Backstory";
 // to the bottom of every newly-created character note.
 const DEFAULT_SETTINGS = {
   newCharacterFolder: "Kompendium",
+  // Where Homebrew Content > Items' "+ Create Homebrew Item Note" wizard
+  // creates new item notes (see openHomebrewItemWizard/
+  // createHomebrewItemNote) - a real vault note per item, not plugin
+  // settings data, so it can be found by "Link Item" and the #Item tag
+  // scan like any other item note. Empty means "vault root" - unlike
+  // newCharacterFolder above this has no baked-in default path, since
+  // where an item library lives is entirely campaign-specific (this
+  // plugin has no folder-path assumptions anywhere else - see
+  // getAllItemNotes/InventoryTracker.getItemPages, both tag-only lookups).
+  // Each rarity gets its own subfolder under this one (e.g.
+  // "<itemLibraryFolder>/Rare/Flame Tongue.md"), matching claude/
+  // item-schema.md's existing Předměty/<Rarity>/ convention.
+  itemLibraryFolder: "",
+  // Where Homebrew Content > Feats' "+ Create Homebrew Feat Note" wizard
+  // creates new feat notes (see openHomebrewFeatWizard/createHomebrewFeatNote)
+  // - a real bilingual vault note per feat, matching the Rysy (Feats)
+  // library's own format exactly (see buildHomebrewFeatNote), so it's
+  // picked up by getAllFeatNotes/the Level Up "Take a Feat instead" picker
+  // like any official feat. Each feat's category subfolder is created
+  // underneath this one (e.g. "<featLibraryFolder>/Obecné rysy (General
+  // Feats)/Rys (Feat).md"), matching the existing library's own layout -
+  // this vault's two connected copies use different paths here
+  // (Test Vault's Rysy (Feats) sits one folder deeper than Mobile Vault's),
+  // which is exactly why this is a per-vault setting instead of hardcoded.
+  featLibraryFolder: "",
+  // Where Homebrew Content > Monsters' "+ Create Homebrew Monster Note"
+  // wizard creates new monster notes (see openHomebrewMonsterWizard/
+  // createHomebrewMonsterNote) - a real vault note using the exact same
+  // frontmatter + "```statblock```" codeblock + trailing "#Monster" tag
+  // convention as every existing monster note in this vault (see
+  // getAllMonsterNotes/CreaturesTracker), so it's picked up by the
+  // Creatures tab and any other #Monster lookup immediately, no reload
+  // needed. Unlike Items/Feats above there's no rarity/category subfolder
+  // split - every homebrew monster lands directly in this one folder,
+  // matching this vault's own existing "04. Kniha příšer/Homebrew Příšery"
+  // convention (one flat folder for every homebrew creature regardless of
+  // type - Type still gets recorded in frontmatter/tags for filtering).
+  monsterLibraryFolder: "",
+  // Named PC rosters for the Character Tracker block (see CharacterTracker/
+  // getAllPlayerNotes/resolveCharacterTrackerRoster below) - set up once in
+  // Settings > Party Groups, then pick a group by name in any
+  // `character-tracker` note instead of hand-picking every player every
+  // time. Each group is { id, name, members: ["[[Name]]", ...] }; a
+  // character-tracker block can still add individual PCs on top of
+  // whichever group it selects (stored per-note as party_overrides, not
+  // here).
+  partyGroups: [],
+  // When set, Classes/Subclasses/Races/Ancestries/Features/Backgrounds
+  // (see HOMEBREW_LIST_KEYS/writeHomebrewBookFiles/readHomebrewBookFiles
+  // above) are no longer stored inline in this data.json - instead each
+  // sourcebook's additions live in their own "<this>/<Book Name>/
+  // <Book Name>.json" file underneath this folder, grouped by each entry's
+  // own Book field. Left empty, nothing changes: those six lists keep
+  // living right here in data.json exactly as before. Items/Feats/Monsters
+  // are unaffected either way - they're real vault notes already (see
+  // itemLibraryFolder/featLibraryFolder/monsterLibraryFolder above).
+  // Unlike those three folders, this is read/written via app.vault.adapter
+  // rather than app.vault (see the comment above writeHomebrewBookFiles),
+  // so it's meant to point inside this plugin's OWN .obsidian/plugins/
+  // folder, right next to data.json - hidden from the File Explorer and
+  // every note-scanning plugin exactly like data.json already is, since
+  // none of this is meant to be browsed as vault content.
+  homebrewDataFolder: "",
   // Where the "Abilities" / "Features" / "Actions" companion files for
   // every character live (this used to be the hardcoded SHARED_FOLDER
   // constant below - it's now this setting instead, applied at load time
@@ -318,6 +656,17 @@ const DEFAULT_SETTINGS = {
   // other notes but doesn't want every stat on this sheet turned into a
   // button.
   diceRollerEnabled: true,
+  // Whether the Homebrew Content section (Classes/Subclasses/Races/
+  // Ancestries/Backgrounds/Features/Items/Feats creation wizards) shows up
+  // in this Settings tab when Obsidian is running on a mobile phone (see
+  // Platform.isMobile in Dnd2024SettingTab.display) - has no effect on
+  // desktop, where that section always shows regardless of this value.
+  // Defaults to true (shown) - most players won't be adding or editing
+  // Homebrew Content from their phone, but there's no harm leaving it
+  // visible by default; this exists so anyone who'd rather this screen
+  // stay short on a phone can turn it off. Existing homebrew content keeps
+  // working everywhere either way - this only hides the wizards themselves.
+  mobileHomebrewCreationEnabled: true,
   customSections: [
     { heading: "Backstory", content: "Write the character's backstory here." },
     {
@@ -345,15 +694,31 @@ const DEFAULT_SETTINGS = {
   // (limited uses that recharge on a rest, e.g. "2 uses per Short Rest" -
   // see FEATURE_RESOURCE_DEFS). See buildHomebrewMechanicDefs for how
   // these get merged in alongside the built-in defs at runtime.
-  homebrewClasses: [], // [{ id, name, hitDie }]
-  homebrewSubclasses: [], // [{ id, className, name, features: [{ id, name, level, description, mechanic }] }]
-  homebrewRaces: [], // [{ id, name, traits: [{ name, description, mechanic }] }]
+  homebrewClasses: [], // [{ id, name, description, hitDie }]
+  homebrewSubclasses: [], // [{ id, className, name, description, features: [{ id, name, level, description, mechanic }] }]
+  homebrewRaces: [], // [{ id, name, description, traits: [{ name, description, mechanic }] }]
+  homebrewAncestries: [], // [{ id, raceName, traitName, description, hint, options: [{ label, desc }] }]
   homebrewFeatures: [], // [{ id, name, description, mechanic }]
+  // Homebrew backgrounds - unlike the wizards above, these feed a plain
+  // data lookup (BACKGROUND_DATA_2024/getBackgroundData) rather than a
+  // features list, so the Create Character wizard's Background picker,
+  // ability-bonus panel, and auto-applied skills/tool proficiency all work
+  // for a homebrew background exactly like a built-in one (see
+  // getBackgroundData/getAllBackgroundOptions/getBackgroundExtraFeatures).
+  // abilities must be exactly 3 ability keys ("str"/"dex"/"con"/"int"/
+  // "wis"/"cha" - the same 3-of-6 shape every built-in 2024 background
+  // uses for its Ability Bonus picker); skills must be exactly 2 names
+  // matching STANDARD_SKILLS. tool and feat are both optional free text -
+  // when blank, getBackgroundExtraFeatures simply skips that entry instead
+  // of adding an empty-named Feature (a background with no printed tool
+  // proficiency or no Origin Feat in this vault's library yet is valid).
+  homebrewBackgrounds: [], // [{ id, name, description, abilities: [3 ability keys], skills: [2 skill names], tool, feat }]
 };
 
 // ---- Level Up data tables ----
-// Best-effort reconstruction of the 2024 Player's Handbook class tables.
-// This is NOT pulled from an
+// Best-effort reconstruction of the 2024 Player's Handbook class tables
+// (Artificer is still the Tasha's Cauldron of Everything version, since it
+// wasn't reprinted in the 2024 core PHB). This is NOT pulled from an
 // official digital source - both the feature names AND the one-line
 // descriptions below are paraphrased from general knowledge of the class
 // tables, so treat all of it as a helpful draft, not gospel: the "Level Up"
@@ -371,6 +736,24 @@ const SUBCLASS_FEATURE_DESC = "Determined by your subclass choice - check your s
 const sub = (label) => f(label ? `Subclass Feature (${label})` : "Subclass Feature", SUBCLASS_FEATURE_DESC);
 
 const CLASS_LEVEL_FEATURES = {
+  Artificer: {
+    1: [
+      f("Magical Tinkering", "You can invest 10 minutes to magically tinker with one Tiny nonmagical object nearby, giving it a minor property (a light, a sound, a sensory message, or a repeating clock) until you use this feature again."),
+      f("Spellcasting", "You gain the ability to cast artificer spells using Intelligence, and you can use tools as spellcasting focuses."),
+    ],
+    2: [f("Infuse Item", "You learn to imbue mundane items with magical infusions, turning them into magic items for as long as you maintain them - the number of infusions known and active grows as you level.")],
+    3: [
+      sub("Artificer Specialist"),
+      f("The Right Tool for the Job", "With Tinker's Tools, you can magically create one set of artisan's tools in your hand as a bonus action, usable until you create a different set this way."),
+    ],
+    6: [f("Tool Expertise", "Your proficiency bonus is doubled for any ability check you make that uses your proficiency with a tool.")],
+    7: [f("Flash of Genius", "As a reaction, when you or a creature within 30 feet makes an ability check or saving throw, you can add your Intelligence modifier to the roll.")],
+    10: [f("Magic Item Adept", "You can attune to up to 4 magic items at once, and can craft uncommon magic items in a quarter of the normal time and gold cost.")],
+    11: [f("Spell-Storing Item", "During a Long Rest, you can store a 1st- or 2nd-level spell in an object, which another creature can then use.")],
+    14: [f("Magic Item Savant", "You can attune to up to 5 magic items at once, and can attune to and use magic items even if they normally have class, race, or level requirements you don't meet.")],
+    18: [f("Magic Item Master", "You can attune to up to 6 magic items at once.")],
+    20: [f("Soul of Artifice", "You gain a +1 bonus to all saving throws for each magic item you're attuned to, and can sacrifice an attuned item as a reaction to avoid dropping to 0 HP, once per Long Rest.")],
+  },
   Barbarian: {
     1: [
       f("Rage", "As a bonus action, you enter a rage lasting up to a minute that gives you resistance to bludgeoning, piercing, and slashing damage, a bonus to melee damage with Strength, and advantage on Strength checks and saves."),
@@ -782,6 +1165,20 @@ const FEATURE_CHOICE_DEFS = {
     hint: "pick a second combat style, different from your first",
     describe: FIGHTING_STYLE_DESCRIPTIONS,
   },
+  // Bug report #2: the Fighter (Psi Warrior et al. aside) subclass feature
+  // is actually named "Fighting Style & Blade Flourish" at the table (the
+  // Fighting Style half is the real, enumerable choice this picker should
+  // offer; Blade Flourish's own options are chosen turn-by-turn in play, not
+  // here) - findFeatureChoiceDef's exact-or-stripped-parenthetical matching
+  // never found a def for that compound name, so every character with this
+  // feature got no picker at all. Routing it onto the same options/describe
+  // as plain "fighting style" above fixes that without duplicating them.
+  "fighting style & blade flourish": {
+    count: 1,
+    options: FIGHTING_STYLE_OPTIONS,
+    hint: "pick one combat style (Blade Flourish's own options are chosen in the moment, not here)",
+    describe: FIGHTING_STYLE_DESCRIPTIONS,
+  },
   "expertise": {
     count: 2,
     // Offer the character's currently-proficient skills, if any are marked
@@ -843,6 +1240,242 @@ const FEATURE_CHOICE_DEFS = {
     options: ELDRITCH_INVOCATION_OPTIONS,
     hint: "pick your Eldritch Invocations (prerequisites aren't checked here - see your book)",
   },
+  // ---- Bug report #4: a sweep for other features whose own description
+  // text names a short, enumerable list of options but had no
+  // FEATURE_CHOICE_DEFS entry at all - the exact gap that blocked picking
+  // Colossus Slayer on a Ranger Hunter. Each one below is named in its
+  // class/subclass's own rules text with a closed list (unlike, say, Totem
+  // Spirit's "Bear, Eagle, Wolf, and more", or an in-the-moment/target-
+  // selection choice like Divine Strike or Fortifying Soul) - this sweep
+  // was done by grepping every class/subclass description for
+  // choice-sounding phrasing and isn't a guaranteed-exhaustive pass over
+  // all 111 subclasses, so more gaps than these may still exist.
+  "hunter's prey": {
+    count: 1,
+    options: ["Colossus Slayer", "Giant Killer", "Horde Breaker"],
+    hint: "pick one combat edge (Ranger Hunter, level 3)",
+  },
+  "defensive tactics": {
+    count: 1,
+    options: ["Escape the Horde", "Multiattack Defense", "Steel Will"],
+    hint: "pick one defensive edge (Ranger Hunter, level 7)",
+  },
+  "multiattack": {
+    count: 1,
+    options: ["Volley", "Whirlwind Attack"],
+    hint: "pick one (Ranger Hunter, level 11) - Volley is ranged, Whirlwind Attack is melee",
+  },
+  "superior hunter's defense": {
+    count: 1,
+    options: ["Evasion", "Stand Against the Tide", "Uncanny Dodge"],
+    hint: "pick one (Ranger Hunter, level 15)",
+  },
+  "storm aura": {
+    count: 1,
+    options: ["Desert", "Sea", "Tundra"],
+    hint: "pick your Storm Aura environment (Barbarian Storm Herald)",
+  },
+  "fiendish resilience": {
+    count: 1,
+    options: [
+      "Acid", "Bludgeoning", "Cold", "Fire", "Force", "Lightning", "Necrotic",
+      "Piercing", "Poison", "Psychic", "Radiant", "Slashing", "Thunder",
+    ],
+    hint: "pick a damage type to resist until your next rest (Blood Hunter/Fiend Patron)",
+  },
+  "built for success": {
+    count: 1,
+    // Lazy (function, not a plain array) deliberately - STANDARD_SKILLS
+    // itself isn't declared until further down the file, so evaluating
+    // this eagerly as part of the FEATURE_CHOICE_DEFS literal above would
+    // throw a "used before initialization" error at load time, same
+    // reasoning as "expertise"'s own STANDARD_SKILLS fallback above.
+    options: () => STANDARD_SKILLS.map((s) => s.name),
+    hint: "pick one skill (Autognome)",
+  },
+  "envoy of the dead": {
+    count: 1,
+    options: ["Insight", "Intimidation", "Persuasion"],
+    hint: "pick one skill (Reborn)",
+    // Same as Skillful/Primal Knowledge above - the whole effect of this
+    // trait is the skill proficiency itself.
+    grantsSkillProficiency: true,
+  },
+  "path of the kensei": {
+    count: 2,
+    // Same live-vault-query pattern as "weapon mastery" above, but filtered
+    // to exclude anything tagged with the Heavy property, per this
+    // feature's own text ("two weapons that lack the Heavy property").
+    // Falls back to the flat WEAPON_MASTERY_OPTIONS name list (no property
+    // data to filter by) if this vault has no #Item weapon notes yet, same
+    // as getWeaponMasteryOptions' own fallback.
+    options: ({ app } = {}) => {
+      if (!app) return WEAPON_MASTERY_OPTIONS.slice();
+      const notes = getAllItemNotes(app).filter(
+        (n) =>
+          n.fm &&
+          n.fm.item_category === "Weapon" &&
+          !(Array.isArray(n.fm.weapon_properties) && n.fm.weapon_properties.includes("Heavy"))
+      );
+      if (notes.length === 0) return WEAPON_MASTERY_OPTIONS.slice();
+      const seen = new Set();
+      const out = [];
+      for (const { file, fm } of notes) {
+        const base = String(fm.item_base || file.basename).trim();
+        if (seen.has(base)) continue;
+        seen.add(base);
+        out.push(base);
+      }
+      return out.sort((a, b) => a.localeCompare(b));
+    },
+    hint: "pick two weapons (lacking the Heavy property) to be your kensei weapons",
+  },
+  // ---- Bug report #3: Magic Initiate had no picker at all, so its 2
+  // cantrips + 1 first-level spell silently never got added anywhere -
+  // worse, since the Features tab renders after Spells, a player had no
+  // visual cue they even needed to go add them by hand on the Spells tab.
+  // Offered here instead, with its own grantsSpells side effect (see
+  // applyFeatureSideEffects/applySpellGrantSideEffect below) that pushes
+  // each pick straight onto the Spells companion file as an
+  // always-prepared bonus spell, the same [[link]] shape every other
+  // spell pick already uses - so by the time the player reaches the
+  // Spells tab, these are just already there, not something left for
+  // them to notice is "missing" and re-add themselves (which was the
+  // actual risk being flagged: a player who DOES remember could easily
+  // end up adding a 3rd, uncounted copy on top of this one).
+  // 2026-10-19 redesign, per the user's own follow-up: Magic Initiate used
+  // to show every Cleric/Druid/Wizard cantrip and 1st-level spell in ONE
+  // combined list (with the class baked into each option's own label, e.g.
+  // "Fire Bolt (Wizard cantrip)"), which let a player accidentally cross
+  // classes (one Cleric cantrip plus two Wizard spells) and never actually
+  // enforced the real 2-cantrips-plus-1-first-level split (count: 3 just
+  // took any 3 picks from the merged list). renderPicker below replaces
+  // that with a dedicated UI: a Class dropdown first, THEN that class's own
+  // cantrip/1st-level lists as two separate boxes with their own 2-pick/
+  // 1-pick caps - see findFeatureChoiceDef's callers (openLevelUpModal,
+  // both buildFeaturesPage copies) for how renderPicker plugs into the
+  // generic options/count picker as an alternative they check for first.
+  // draft._chosen still ends up as a plain flat array of the 3 bare spell
+  // names (no "(Class cantrip)" suffix needed anymore, since the class is
+  // pinned by its own dropdown) - everything downstream that reads
+  // _chosen (the "Chosen: ..." description suffix, applyFeatureSideEffects'
+  // grantsSpells loop below) keeps working completely unchanged.
+  "magic initiate": {
+    hint: "pick a class, then 2 cantrips and 1 first-level spell from that class's list",
+    grantsSpells: true,
+    renderPicker: (container, { ctx, initialChosen, onChosenChange }) => {
+      const app = ctx && ctx.app;
+      const classes = ["Cleric", "Druid", "Wizard"];
+      container.createEl("div", {
+        cls: "condition-desc",
+        text: "Pick a class, then 2 cantrips and 1 first-level spell from that class's own list.",
+      });
+      const classRow = container.createEl("div", { cls: "action-modal-row" });
+      classRow.createEl("span", { cls: "action-modal-label", text: "Class" });
+      const classSelect = classRow.createEl("select", { cls: "action-modal-name" });
+      for (const c of classes) {
+        const opt = classSelect.createEl("option", { text: c });
+        opt.value = c;
+      }
+
+      const spellsByClassLevel = (cls) => {
+        const byLevel = { 0: [], 1: [] };
+        if (!app) return byLevel;
+        for (const sp of getAllSpellNotes(app)) {
+          const lvl = Number(sp.fm["Spell level"] ?? 0);
+          if (lvl !== 0 && lvl !== 1) continue;
+          const allowed =
+            lvl === 0
+              ? cantripAllowedForClass(sp.file.basename, cls)
+              : spellAllowedForClass(sp.file.basename, cls);
+          if (allowed) byLevel[lvl].push(sp.file.basename);
+        }
+        byLevel[0].sort((a, b) => a.localeCompare(b));
+        byLevel[1].sort((a, b) => a.localeCompare(b));
+        return byLevel;
+      };
+
+      let chosen = Array.isArray(initialChosen) ? initialChosen.slice() : [];
+      // Round-tripping through Back/Next (or reopening the Features page)
+      // only hands this renderPicker the flat chosen-names array back, not
+      // which class they came from - guessed here by finding the one class
+      // whose own list contains every already-picked name, falling back to
+      // the first class for a brand-new pick or if the vault's spell list
+      // changed under a stale pick.
+      const guessClassFor = (names) => {
+        if (names.length) {
+          for (const cls of classes) {
+            const byLevel = spellsByClassLevel(cls);
+            const all = new Set([...byLevel[0], ...byLevel[1]]);
+            if (names.every((n) => all.has(n))) return cls;
+          }
+        }
+        return classes[0];
+      };
+      classSelect.value = guessClassFor(chosen);
+
+      const spellsContainer = container.createEl("div");
+      const rebuildSpellSelects = () => {
+        spellsContainer.empty();
+        const byLevel = spellsByClassLevel(classSelect.value);
+        const chosenSet = new Set(chosen);
+        let cantripSelect, level1Select;
+        const recombine = () => {
+          chosen = [
+            ...Array.from(cantripSelect.selectedOptions).map((o) => o.value),
+            ...Array.from(level1Select.selectedOptions).map((o) => o.value),
+          ];
+          onChosenChange(chosen);
+        };
+        const buildLevelSelect = (lvl, label, max) => {
+          const row = spellsContainer.createEl("div");
+          row.createEl("div", { cls: "condition-desc", text: `${label} (choose ${max}):` });
+          const names = byLevel[lvl] || [];
+          const select = row.createEl("select", {
+            cls: "feature-choice-select",
+            attr: { multiple: true, size: String(Math.min(Math.max(names.length, 1), 6)) },
+          });
+          for (const n of names) {
+            const opt = select.createEl("option", { text: n });
+            opt.value = n;
+            if (chosenSet.has(n)) opt.selected = true;
+          }
+          // Cantrips needs 2 picks (ctrl/cmd-click required); the 1st-Level
+          // Spells box only ever needs 1, so it never shows this hint.
+          if (max > 1) {
+            row.createEl("div", {
+              cls: "feature-choice-hint",
+              text: "Ctrl/Cmd-click (or shift-click) to select more than one.",
+            });
+          }
+          const updateCap = () => {
+            const atCap = select.selectedOptions.length >= max;
+            for (const o of Array.from(select.options)) {
+              if (!o.selected) o.disabled = atCap;
+            }
+          };
+          updateCap();
+          select.addEventListener("change", () => {
+            updateCap();
+            recombine();
+          });
+          return select;
+        };
+        cantripSelect = buildLevelSelect(0, "Cantrips", 2);
+        level1Select = buildLevelSelect(1, "1st-Level Spells", 1);
+        recombine();
+      };
+      // Switching class clears whatever was picked under the previous one -
+      // a different class's list may not even contain those names anymore,
+      // and silently carrying over an unrelated pick would be worse than
+      // just asking again.
+      classSelect.addEventListener("change", () => {
+        chosen = [];
+        rebuildSpellSelects();
+      });
+      rebuildSpellSelects();
+    },
+  },
 };
 // Matches a feature name against FEATURE_CHOICE_DEFS: tries the exact name
 // first (so e.g. "Metamagic (additional option)" hits its own, more
@@ -893,7 +1526,7 @@ function splitChosenSuffix(description) {
 // `onDone({name, description})` on save - callback style (not a Promise)
 // only so call sites don't need to be made async.
 function openQuickAddFeatureModal(onDone) {
-  const overlay = document.createElement("div");
+  const overlay = activeDocument.createElement("div");
   overlay.className = "action-modal-overlay";
   const modal = overlay.createEl("div", { cls: "action-modal action-modal-feature" });
   modal.createEl("h3", { text: "Add Feature" });
@@ -918,7 +1551,7 @@ function openQuickAddFeatureModal(onDone) {
     onDone({ name, description: descInput.value });
   };
 
-  document.body.appendChild(overlay);
+  activeDocument.body.appendChild(overlay);
   nameInput.focus();
 }
 
@@ -935,17 +1568,124 @@ function openQuickAddFeatureModal(onDone) {
 // exact RACE_OPTIONS spelling; consumed by the Create Character wizard's
 // Features page (collectRaceTraits) and shown on the Overview tab.
 const RACE_TRAITS = {
+  Aarakocra: [
+    f("Talons", "Your unarmed strikes with your talons deal 1d4 slashing damage."),
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+  ],
+  Aasimar: [
+    f("Celestial Resistance", "You have resistance to necrotic damage and radiant damage."),
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Healing Hands", "As an action, touch a creature to heal it for HP equal to your level. Usable a number of times equal to your Proficiency Bonus per Long Rest."),
+    f("Light Bearer", "You know the Light cantrip; Charisma is your spellcasting ability for it."),
+    f("Celestial Revelation", "At level 3+, choose one celestial transformation you can call on once per Long Rest (see your book for the full benefits of your choice)."),
+  ],
+  "Astral Elf": [
+    f("Astral Elf Weapon Training", "You have proficiency with the longsword, shortsword, shortbow, and longbow."),
+    f("Astral Fire", "You know the Light cantrip. At level 3+ you can also cast Guiding Bolt, and at level 5+ Enlarge/Reduce (targeting only yourself), each once per Long Rest; Intelligence, Wisdom, or Charisma is your spellcasting ability (your choice)."),
+    f("Astral Trance", "You don't need to sleep and can't be forced to sleep by magic. Instead you meditate for 4 hours a day to gain the same benefit as 8 hours of sleep."),
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Fey Ancestry", "You have advantage on saving throws you make to avoid or end the charmed condition, and magic can't put you to sleep."),
+  ],
+  Autognome: [
+    f("Autognome Resilience", "You are immune to disease, and immune to poison damage and the poisoned condition."),
+    f("Built for Success", "Choose one skill. When you make a check with that skill, you can treat a d20 roll of 7 or lower on the check as an 8."),
+    f("Component Housing", "Your body has built-in slots for small cosmetic or utility components (see your book for the full list of options)."),
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Efficient", "You don't need to eat, drink, breathe, or sleep. Instead you enter a dormant, motionless state for 4 hours a day to gain the same benefit as 8 hours of sleep."),
+    f("Immutable Form", "You are immune to any effect that would alter your form against your will."),
+  ],
+  Bugbear: [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Fey Ancestry", "You have advantage on saving throws you make to avoid or end the charmed condition."),
+    f("Long-Limbed", "Your reach for melee attacks made on your turn is 5 feet longer than normal."),
+    f("Powerful Build", "You count as one size larger when determining your carrying capacity and the weight you can push, drag, or lift."),
+    f("Sneaky", "You are proficient in the Stealth skill, and you can take the Hide action even when only lightly obscured."),
+  ],
+  Centaur: [
+    f("Charge", "If you move at least 10 feet straight toward a target and then hit it with a melee attack using your hooves on the same turn, you deal an extra 1d6 damage."),
+    f("Hooves", "Your unarmed strikes with your hooves deal 1d4 bludgeoning damage."),
+    f("Equine Build", "You count as one size larger when determining carrying capacity, and you have advantage on saves to avoid being knocked prone while you have all four hooves on the ground."),
+    f("Survivor", "You regain additional hit points when you spend Hit Dice, and regain extra hit points when you finish a Short Rest (see your book for the exact amount)."),
+  ],
+  Changeling: [
+    f("Changeling Instincts", "You have proficiency in two skills of your choice from the standard skill list."),
+    f("Shapechanger", "As a bonus action, magically alter your appearance - height, weight, facial features, voice, and coloration - to resemble another humanoid, or return to your true form."),
+  ],
+  "Deep Gnome": [
+    f("Darkvision", "You can see in dim light within 120 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Gnomish Cunning", "You have advantage on Intelligence, Wisdom, and Charisma saving throws."),
+    f("Stone Camouflage", "You have advantage on Dexterity (Stealth) checks made to hide in rocky terrain."),
+    f("Svirfneblin Magic", "You always have Nondetection active on yourself. At level 3+ you can also cast Blindness/Deafness, and at level 5+ Blur, each once per Long Rest; Intelligence is your spellcasting ability."),
+  ],
+  // Updated 2026-09-21 to match Astarion's Book of Hungers' own Dhampir
+  // writeup (this book's dedicated species entry), replacing an older
+  // Van Richten's Guide to Ravenloft-style version - see the entry in
+  // vault-map.md for the diff and sourcing caveats. Notably this version
+  // DOES need to breathe (no "don't need to breathe" clause) and renames
+  // Deathless Nature to the narrower Trace of Undeath (Necrotic resistance
+  // only). Size is a player choice (Small or Medium) not modeled here since
+  // no other RACE_TRAITS entry tracks Size either.
+  Dhampir: [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Trace of Undeath", "You have resistance to necrotic damage."),
+    f("Spider Climb", "You have a Climbing speed equal to your Walking speed. Starting at character level 3, you can move up, down, and across vertical surfaces and along ceilings while leaving your hands free."),
+    f("Vampiric Bite", "Your fangs count as an Unarmed Strike. If you hit with them, you can deal 1d4 + your Constitution modifier piercing damage instead of the normal bludgeoning damage, and against a creature that isn't a Construct or Undead you choose one: Drain (regain hit points equal to the damage dealt) or Strengthen (gain a bonus equal to the damage dealt to your next ability check or attack roll within the next minute). Usable a number of times equal to your Proficiency Bonus per Long Rest."),
+  ],
   Dragonborn: [
     f("Draconic Ancestry", "Choose a dragon type; it sets the damage type of your Breath Weapon and the type you have resistance to (see your book)."),
     f("Breath Weapon", "As an action, exhale destructive energy in a 15-foot cone or 30-foot line (your choice fixed by your ancestry); each creature in the area makes a save or takes damage. Usable a number of times equal to your Proficiency Bonus per Long Rest."),
     f("Damage Resistance", "You have resistance to the damage type associated with your Draconic Ancestry."),
     f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
   ],
+  Duergar: [
+    f("Darkvision", "You can see in dim light within 120 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Duergar Magic", "At level 3+ you can cast Enlarge/Reduce (targeting only yourself), and at level 5+ Invisibility (targeting only yourself), each once per Long Rest; Intelligence is your spellcasting ability."),
+    f("Duergar Resilience", "You have advantage on saving throws against illusions and against being charmed or paralyzed, and you have resistance to poison damage."),
+    f("Sunlight Sickness", "You have disadvantage on attack rolls and on Wisdom (Perception) checks that rely on sight when you or the target is in direct sunlight."),
+  ],
   Dwarf: [
     f("Darkvision", "You can see in dim light within 120 feet as if it were bright light, and in darkness as if it were dim light."),
     f("Dwarven Resilience", "You have resistance to poison damage, and advantage on saving throws you make to avoid or end the poisoned condition."),
     f("Dwarven Toughness", "Your hit point maximum increases by 1, and increases by 1 again whenever you gain a level."),
     f("Stonecunning", "As a bonus action, gain Tremorsense out to 60 feet for 10 minutes, a limited number of times, regaining expended uses on a Long Rest; you're also treated as proficient in History checks about stonework."),
+  ],
+  // ---- Hill Dwarf / Mountain Dwarf (2026-09-23) - the 2014 PHB's two
+  // Dwarf subraces. The unified 2024 "Dwarf" entry just above has no
+  // subrace choice at all (unlike Elf's own "Elven Lineage" trait), which
+  // is correct for a from-scratch 2024-rules character but left no way to
+  // pick a legacy Dwarf built under the 2014 rules (a D&D Beyond sheet
+  // using 2014 rules shows "Hill Dwarf"/"Mountain Dwarf" as their own
+  // Race, not "Dwarf"). Modeled as their own top-level species here,
+  // matching how this file already treats other once-subraces-now-
+  // separately-playable species (Duergar, Deep Gnome, Sea Elf, Eladrin,
+  // Astral Elf) rather than adding a subrace-picker mechanism nothing else
+  // in this file has. 60 ft. Darkvision and 25 ft. Speed (not the 2024
+  // Dwarf's 120 ft./30 ft.) per the 2014 PHB, plus the 2014 Dwarf's own
+  // Dwarven Combat Training/Tool Proficiency traits the 2024 version
+  // dropped, one on top of the shared base per subrace (Toughness for
+  // Hill, Armor Training for Mountain) - same "best-effort draft" caveat
+  // as this table's other entries.
+  "Hill Dwarf": [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Dwarven Resilience", "You have advantage on saving throws you make to avoid or end the poisoned condition, and you have resistance to poison damage."),
+    f("Dwarven Combat Training", "You have proficiency with the battleaxe, handaxe, light hammer, and warhammer."),
+    f("Tool Proficiency", "You gain proficiency with one of the following: smith's tools, brewer's supplies, or mason's tools (your choice)."),
+    f("Stonecunning", "Whenever you make an Intelligence (History) check related to the origin of stonework, you are considered proficient and add double your Proficiency Bonus."),
+    f("Dwarven Toughness", "Your hit point maximum increases by 1, and increases by 1 again whenever you gain a level."),
+  ],
+  "Mountain Dwarf": [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Dwarven Resilience", "You have advantage on saving throws you make to avoid or end the poisoned condition, and you have resistance to poison damage."),
+    f("Dwarven Combat Training", "You have proficiency with the battleaxe, handaxe, light hammer, and warhammer."),
+    f("Tool Proficiency", "You gain proficiency with one of the following: smith's tools, brewer's supplies, or mason's tools (your choice)."),
+    f("Stonecunning", "Whenever you make an Intelligence (History) check related to the origin of stonework, you are considered proficient and add double your Proficiency Bonus."),
+    f("Dwarven Armor Training", "You have proficiency with light and medium armor."),
+  ],
+  Eladrin: [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Fey Ancestry", "You have advantage on saving throws you make to avoid or end the charmed condition, and magic can't put you to sleep."),
+    f("Fey Step", "As a bonus action, teleport up to 30 feet to an unoccupied space you can see. You can use this trait a number of times equal to your Proficiency Bonus, regaining all expended uses after a Long Rest (and regaining one use whenever you roll Initiative with no uses left)."),
+    f("Fey Step Season", "Choose a season (Autumn, Winter, Spring, or Summer) - whenever you use Fey Step, you can invoke your season for an additional minor effect on a creature within 5 feet of your destination (see your book)."),
   ],
   Elf: [
     f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
@@ -954,15 +1694,55 @@ const RACE_TRAITS = {
     f("Trance", "You don't need to sleep, and can't be forced to. Instead you meditate for 4 hours a day to gain the same benefit as 8 hours of sleep."),
     f("Elven Lineage", "Choose an elven lineage (Drow, High Elf, or Wood Elf) - it grants you a cantrip and a minor extra benefit (see your book)."),
   ],
+  Fairy: [
+    f("Fairy Magic", "You know the Druidcraft cantrip; at higher levels you can cast Faerie Fire and Enlarge/Reduce once each per Long Rest."),
+    f("Flight", "You have a Flying speed equal to your Walking speed while you aren't wearing heavy armor."),
+  ],
+  Firbolg: [
+    f("Firbolg Magic", "You can cast Detect Magic and Disguise Self (altering only your own appearance, to look like a normal-sized Medium humanoid) a number of times per Long Rest."),
+    f("Hidden Step", "As a bonus action, turn invisible until the start of your next turn or until you attack, deal damage, or force a save; usable a limited number of times per Long Rest."),
+    f("Powerful Build", "You count as one size larger when determining your carrying capacity and the weight you can push, drag, or lift."),
+  ],
+  Genasi: [
+    f("Elemental Legacy", "Choose an elemental legacy (Air, Earth, Fire, or Water) - it grants a cantrip, a damage resistance, and further benefits at higher levels (see your book)."),
+  ],
+  Giff: [
+    f("Firearms Proficiency", "You have proficiency with all firearms (if your table doesn't use firearms, you instead gain proficiency with two martial weapons of your choice)."),
+    f("Hippo-Like Build", "You have advantage on Strength checks and Strength saving throws, and you can hold your breath for up to 1 hour."),
+    f("Powerful Build", "You count as one size larger when determining your carrying capacity and the weight you can push, drag, or lift."),
+  ],
+  Githyanki: [
+    f("Decadent Mastery", "You gain proficiency in one skill or tool of your choice, and you can speak, read, and write one extra language of your choice."),
+    f("Githyanki Psionics", "You know the Mage Hand cantrip (the hand is invisible). At level 3+ you can also cast Jump on yourself, and at level 5+ Misty Step, each once per Long Rest; Intelligence is your spellcasting ability."),
+    f("Martial Prodigy", "You have proficiency with light and medium armor, and with the shortsword and longsword."),
+  ],
+  Githzerai: [
+    f("Githzerai Psionics", "You know the Mage Hand cantrip (the hand is invisible). At level 3+ you can also cast Shield, and at level 5+ Detect Thoughts, each once per Long Rest; Wisdom is your spellcasting ability."),
+    f("Mental Discipline", "You have advantage on saving throws you make to avoid or end the charmed or frightened condition."),
+  ],
   Gnome: [
     f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
     f("Gnomish Cunning", "You have advantage on Intelligence, Wisdom, and Charisma saving throws."),
     f("Gnomish Lineage", "Choose a gnomish lineage (Forest Gnome or Rock Gnome) - it grants a cantrip and a further minor benefit (see your book)."),
   ],
+  Goblin: [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Fury of the Small", "When you damage a creature larger than you with an attack or spell, you can deal extra damage equal to your level once per Short or Long Rest."),
+    f("Nimble Escape", "You can take the Disengage or Hide action as a bonus action on each of your turns."),
+  ],
   Goliath: [
     f("Large Form", "Starting at level 5, you can grow to Large size as a bonus action for 10 minutes, a limited number of times per Long Rest."),
     f("Powerful Build", "You count as one size larger when determining your carrying capacity and the weight you can push, drag, or lift."),
     f("Giant Ancestry", "Choose one giant-granted benefit (Cloud's Jaunt, Fire's Burn, Frost's Chill, Hill's Tumble, Stone's Endurance, or Storm's Thunder) - usable a number of times equal to your Proficiency Bonus per Long Rest (see your book)."),
+  ],
+  Grung: [
+    f("Amphibious", "You can breathe air and water."),
+    f("Poison Skin/Poisonous Secretion", "You secrete a paralytic poison; creatures that touch you or hit you with an unarmed strike/natural weapon while within 5 feet must save or be poisoned."),
+    f("Standing Leap", "Your long jump is up to 25 feet and your high jump up to 15 feet, with or without a running start."),
+  ],
+  Hadozee: [
+    f("Dexterous Feet", "You can use your feet for simple tasks that would normally require a free hand, such as opening an unlocked door or manipulating an object, though not for attacks."),
+    f("Glide", "When you fall, you can spread your arms and legs and use the folds of skin between them to glide; you take no falling damage and you can move up to half your fall distance horizontally."),
   ],
   Halfling: [
     f("Brave", "You have advantage on saving throws you make to avoid or end the frightened condition."),
@@ -970,20 +1750,177 @@ const RACE_TRAITS = {
     f("Luck", "When you roll a 1 on the d20 of an attack roll, ability check, or saving throw, you can reroll the die and must use the new roll."),
     f("Naturally Stealthy", "You can take the Hide action even when you are obscured only by a creature that is at least one size larger than you."),
   ],
+  "Half-Elf": [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Fey Ancestry", "You have advantage on saving throws you make to avoid or end the charmed condition."),
+    f("Skill Versatility", "You gain proficiency in two skills of your choice."),
+  ],
+  "Half-Orc": [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Adrenaline Rush", "As a bonus action, gain temporary hit points and extra movement, usable a number of times equal to your Proficiency Bonus per Short or Long Rest."),
+    f("Relentless Endurance", "When reduced to 0 hit points but not killed outright, you can drop to 1 hit point instead - once per Long Rest."),
+  ],
+  Harengon: [
+    f("Hare-Trigger", "You can add your Proficiency Bonus to your Initiative rolls."),
+    f("Leporine Senses", "You have proficiency in the Perception skill."),
+    f("Lucky Footwork", "When you fail a Dexterity saving throw, you can roll a d4 and add it to the save, potentially turning failure into success; usable a number of times equal to your Proficiency Bonus per Long Rest."),
+    f("Rabbit Hop", "As a bonus action, jump a distance (up to your Proficiency Bonus x 5 feet) without provoking opportunity attacks, usable a number of times equal to your Proficiency Bonus per Long Rest."),
+  ],
+  Hexblood: [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Hex Magic", "You know the Disguise Self spell and can cast it without a spell slot. At level 3+ you can also cast Hex once per Long Rest without expending a spell slot; Intelligence, Wisdom, or Charisma is your spellcasting ability (your choice)."),
+    f("Hexblood Resilience", "You have advantage on saving throws against being poisoned, and resistance to poison damage."),
+    f("Sense the Unseen", "Whenever you cast Disguise Self using your Hex Magic trait, you can also sense the general direction of, and roughly how far away, any invisible creatures are within 30 feet of you, as long as you aren't blinded or deafened."),
+  ],
+  Hobgoblin: [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Fortune from the Many", "When you or a creature within 30 feet that can see you fails an ability check, attack roll, or saving throw, you can grant a reroll with a bonus, usable a limited number of times per Long Rest."),
+    f("Saving Face", "If you miss with an attack roll or fail an ability check or saving throw, gain temporary hit points equal to your level, once per Short or Long Rest, shareable with nearby allies."),
+  ],
   Human: [
     f("Resourceful", "You gain Heroic Inspiration whenever you finish a Long Rest."),
     f("Skillful", "You gain proficiency in one skill of your choice."),
     f("Versatile", "You gain an Origin feat of your choice."),
+  ],
+  Kalashtar: [
+    f("Mental Discipline", "You have advantage on saving throws you make to avoid or end the charmed or frightened condition."),
+    f("Mind Link", "As a bonus action, establish a telepathic bond with a creature you can see, letting you communicate telepathically for a limited time."),
+    f("Severed from Dreams", "You don't sleep and can't be put to sleep by magic; instead you meditate 4 hours a day. You're immune to the Dream spell and similar magic."),
+  ],
+  Kenku: [
+    f("Expert Forgery", "You can duplicate other creatures' handwriting and craftwork, giving advantage on checks to pass off a forgery as genuine."),
+    f("Kenku Recall", "You have advantage on checks to recall lore about settlements you have visited."),
+    f("Mimicry", "You can mimic sounds you've heard, including voices; a listener can tell it's a mimicry with a successful check."),
+  ],
+  Kobold: [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Draconic Cry", "As a bonus action, let out a cry that gives you and nearby allies advantage on attack rolls against a target for a limited time, usable a limited number of times per rest."),
+    f("Pack Tactics", "You have advantage on an attack roll against a creature if at least one of your allies is within 5 feet of it and not incapacitated."),
+  ],
+  Leonin: [
+    f("Claws", "Your unarmed strikes with your claws deal 1d4 slashing damage."),
+    f("Daunting Roar", "As a bonus action, let out a roar that frightens creatures of your choice within 10 feet unless they save, usable a limited number of times per Long Rest."),
+    f("Hunter's Instincts", "You have proficiency in one of Athletics, Intimidation, Perception, or Survival."),
+  ],
+  Lizardfolk: [
+    f("Bite", "Your unarmed strikes with your bite deal 1d6 piercing damage."),
+    f("Hold Breath", "You can hold your breath for up to 15 minutes at a time."),
+    f("Hunter's Lore", "You gain proficiency with two of the following: Animal Handling, Nature, Perception, Stealth, Survival."),
+    f("Natural Armor", "While not wearing armor your AC is 13 + Dex modifier, and you can't wear armor without sacrificing this benefit."),
+  ],
+  Locathah: [
+    f("Leviathan Will", "You have advantage on saving throws you make to avoid or end the charmed or frightened condition."),
+    f("Limited Amphibiousness", "You can breathe air and water, but you must submerge yourself in water for at least 1 hour every 4 hours or start suffering exhaustion."),
+    f("Natural Armor", "While not wearing armor your AC is 12 + Dex modifier, and you can't wear armor without sacrificing this benefit."),
+    f("Sea Native", "You have a Swimming speed of 30 feet."),
+  ],
+  Loxodon: [
+    f("Loxodon Serenity", "You have advantage on saving throws against being charmed or frightened."),
+    f("Natural Armor", "While not wearing armor your AC is 12 + Con modifier, and you can't wear armor without sacrificing this benefit."),
+    f("Powerful Build", "You count as one size larger when determining your carrying capacity and the weight you can push, drag, or lift."),
+    f("Trunk", "You have a prehensile trunk that can lift and hold objects, drink, and smell/sense as an extra way to interact with your surroundings."),
+  ],
+  Minotaur: [
+    f("Goring Rush", "If you move at least 10 feet straight toward a target and then hit it with a gore attack on the same turn, you deal extra damage."),
+    f("Hammering Horns", "Once per turn when you hit with a melee attack, you can push the target away and knock it prone with a horn strike, a limited number of times per Short or Long Rest."),
+    f("Horns", "Your unarmed strikes with your horns deal 1d6 piercing damage."),
+    f("Labyrinthine Recall", "You can perfectly recall any path you have traveled."),
   ],
   Orc: [
     f("Adrenaline Rush", "As a bonus action, gain temporary hit points and extra movement, usable a number of times equal to your Proficiency Bonus per Short or Long Rest."),
     f("Darkvision", "You can see in dim light within 120 feet as if it were bright light, and in darkness as if it were dim light."),
     f("Relentless Endurance", "When reduced to 0 hit points but not killed outright, you can drop to 1 hit point instead - once per Long Rest."),
   ],
+  Owlfolk: [
+    f("Darkvision", "You can see in dim light within 120 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Silent Feathers", "You have proficiency in the Stealth skill."),
+    f("Flight", "You have a Flying speed equal to your Walking speed, though you can't use it while wearing medium or heavy armor."),
+  ],
+  Plasmoid: [
+    f("Amorphous", "You can move through a space as narrow as 1 inch wide without squeezing, and you have advantage on ability checks and saving throws made to escape a grapple."),
+    f("Hold Breath", "You can hold your breath indefinitely while you aren't incapacitated."),
+    f("Natural Resilience", "You have resistance to acid damage and poison damage, and you're immune to the poisoned condition."),
+    f("Shape Self", "As a bonus action, you can change the appearance of your body - flattening to slide under a door, extending a pseudopod, or reshaping a limb to resemble a tool, granting a minor situational benefit (see your book)."),
+  ],
+  Reborn: [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Deathless Nature", "You don't need to eat, drink, or breathe, and you age much more slowly. You still need to rest to gain the benefits of a Short or Long Rest."),
+    f("Envoy of the Dead", "You have advantage on Charisma checks made to interact with spirits, and you have proficiency in one of the following skills of your choice: Insight, Intimidation, or Persuasion."),
+    f("Origin", "Choose an origin (Cursed, Doomed, Faithful, Malignant, or Vigilant) - it grants a further minor benefit (see your book for the full effect of your choice)."),
+  ],
+  Satyr: [
+    f("Fey Ancestry", "You have advantage on saving throws you make to avoid or end the charmed condition, and magic can't put you to sleep."),
+    f("Magic Resistance", "You have advantage on saving throws against spells and other magical effects."),
+    f("Mirthful Leaps", "Your long and high jump distances are increased, calculated as if your Strength score were higher than it is."),
+    f("Ram", "Your unarmed strikes with your horns deal 1d4 bludgeoning damage."),
+  ],
+  "Sea Elf": [
+    f("Child of the Sea", "You have a Swimming speed of 30 feet, and you can breathe air and water."),
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Fey Ancestry", "You have advantage on saving throws you make to avoid or end the charmed condition, and magic can't put you to sleep."),
+    f("Friend of the Sea", "You can communicate simple ideas to any beast that has a Swimming speed, by means of sounds and gestures."),
+    f("Keen Senses", "You have proficiency in the Perception skill."),
+    f("Trance", "You don't need to sleep, and can't be forced to. Instead you meditate for 4 hours a day to gain the same benefit as 8 hours of sleep."),
+  ],
+  Shifter: [
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Shifter's Fangs and Claws", "Your unarmed strikes deal 1d6 damage (piercing or slashing, your choice) instead of the normal bludgeoning."),
+    f("Shifting", "As a bonus action, assume a bestial appearance for 1 minute, gaining temporary hit points and a benefit based on your chosen Shifting type (Beasthide, Longtooth, Swiftstride, or Wildhunt) - a limited number of times per Long Rest (see your book)."),
+  ],
+  "Simic Hybrid": [
+    f("Aquatic Adaptation", "You have a Swimming speed of 30 feet and can breathe air and water."),
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Animal Enhancement", "Choose one enhancement (Manta Glide, Nimble Climber, or Underwater Adaptation) that grows more useful as you level (see your book)."),
+  ],
+  Tabaxi: [
+    f("Cat's Claws", "Your unarmed strikes with your claws deal 1d4 slashing damage, and you have a Climbing speed of 20 feet."),
+    f("Cat's Talent", "You have proficiency in the Perception and Stealth skills."),
+    f("Feline Agility", "You can move at double speed for one dash-like burst on your turn, then can't do so again until you move 0 feet on a later turn."),
+  ],
+  "Thri-kreen": [
+    f("Chameleon Carapace", "As an action, change the color of your carapace to match your surroundings, giving you advantage on Stealth checks to hide as long as you remain motionless and unarmored over it."),
+    f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
+    f("Secondary Arms", "You have two Small arms in addition to your primary set. You can use the secondary arms to hold objects, open doors, and the like, but not to attack or cast spells."),
+    f("Sleepless", "You don't need to sleep and can't be forced to sleep by magic. Instead you meditate for 4 hours a day to gain the same benefit as 8 hours of sleep."),
+    f("Thri-kreen Telepathy", "You can telepathically communicate with any thri-kreen within 60 feet of you who shares a language with you."),
+  ],
   Tiefling: [
     f("Darkvision", "You can see in dim light within 60 feet as if it were bright light, and in darkness as if it were dim light."),
     f("Otherworldly Presence", "You know the Thaumaturgy cantrip; Charisma is your spellcasting ability for it."),
     f("Fiendish Legacy", "Choose a fiendish legacy (Abyssal, Chthonic, or Infernal) - it grants a damage resistance and a spell you can cast once per Long Rest (see your book)."),
+  ],
+  Tortle: [
+    f("Claws", "Your unarmed strikes with your claws deal 1d4 slashing damage."),
+    f("Hold Breath", "You can hold your breath for up to 1 hour."),
+    f("Natural Armor", "While not wearing armor your AC is 17, and you can't wear armor without sacrificing this benefit; you also can't use a shield and still gain this AC."),
+    f("Shell Defense", "As an action, withdraw into your shell for improved AC and resistance to bludgeoning/piercing/slashing damage, but become prone and unable to act, a limited number of times per Long Rest."),
+  ],
+  Triton: [
+    f("Amphibious", "You can breathe air and water."),
+    f("Control Air and Water", "You can cast Fog Cloud, and at higher levels Gust of Wind and Wall of Water, once each per Long Rest."),
+    f("Emissary of the Sea", "You can communicate simple ideas with beasts that have a swimming speed."),
+    f("Guardians of the Depths", "You have resistance to cold damage and can see in deep, dark water as if it were dim light."),
+  ],
+  Vedalken: [
+    f("Tireless Precision", "You gain proficiency in one of Investigation, Medicine, Perception, or Survival, and can add half your proficiency bonus to checks with that skill even without proficiency, twice per Short or Long Rest."),
+    f("Vedalken Dispassion", "You have advantage on saving throws you make to avoid or end being charmed or frightened."),
+    f("Vedalken Manipulation", "You have advantage on checks made to use tools or vehicles with which you're proficient."),
+  ],
+  Verdan: [
+    f("Limited Telepathy", "You can telepathically speak simple messages to creatures within 30 feet."),
+    f("Persuasive", "You have proficiency in the Persuasion skill."),
+    f("Undead Fortitude", "When reduced to 0 hit points but not killed outright, you can attempt to drop to 1 hit point instead."),
+  ],
+  Warforged: [
+    f("Constructed Resilience", "You have advantage on saving throws against being poisoned, resistance to poison damage, and don't need to eat, drink, or breathe."),
+    f("Integrated Protection", "You gain a bonus to AC while not wearing armor, and can integrate armor into your body over a Long Rest."),
+    f("Sentry's Rest", "When you take a Long Rest you remain semi-conscious, and only need 6 hours instead of 8."),
+    f("Specialized Design", "You gain proficiency in one skill and one tool of your choice."),
+  ],
+  "Yuan-Ti Pureblood": [
+    f("Innate Spellcasting", "You know the Poison Spray cantrip; at higher levels you can cast Animal Friendship (snakes only) and Suggestion once each per Long Rest."),
+    f("Magic Resistance", "You have advantage on saving throws against spells and other magical effects."),
+    f("Poison Immunity", "You are immune to poison damage and the poisoned condition."),
   ],
 };
 
@@ -995,18 +1932,70 @@ const RACE_TRAITS = {
 // anywhere), so treat these as a quick plain-language orientation rather
 // than official text - accurate in spirit, not a citation.
 const RACE_DESCRIPTIONS = {
+  Aarakocra: "A birdlike people with feathered wings, native to the wild Elemental Plane of Air and gifted with true flight and a sharp eye for distances.",
+  Aasimar: "Mortals touched by celestial heritage, marked by a divine spark that can manifest as radiant or necrotic wings and light when their inner nature awakens.",
+  "Astral Elf": "Elves born or raised on the Astral Plane, calm and contemplative travelers who can blink briefly out of reality and see truth through illusions.",
+  Autognome: "Small self-aware constructs built by an eccentric gnome inventor, sturdy little automatons immune to poison and disease and able to repair themselves.",
+  Bugbear: "Big, hairy goblinoids with unnervingly long limbs, naturally stealthy despite their size and capable of surprising reach and force in a single strike.",
+  Centaur: "Folk with the lower body of a horse and the upper body of a humanoid, fast overland travelers who fight as comfortably with hooves as with weapons.",
+  Changeling: "Shapeshifters descended from fey trickster stock, able to alter their face and voice at will and instinctively read others' emotions.",
+  "Deep Gnome": "A reclusive gnome subrace adapted to the Underdark, keen-eyed in darkness and skilled at blending into stone to vanish from sight.",
+  Dhampir: "Half-vampire wanderers caught between life and undeath, marked by a vampiric bite, a climbing gift, and a partial resistance to the grave's cold touch.",
   Dragonborn: "Proud, draconic humanoids descended from dragons, each lineage marked by a distinct elemental breath weapon and a natural resistance to that same damage type.",
+  Duergar: "Grim gray dwarves of the Underdark, hardened by generations of enslavement to illithids, able to turn invisible and grow to giant size in short bursts.",
   Dwarf: "Stout, hardy folk of stone and steel, at home underground, with keen darkvision and a body naturally resistant to poison.",
+  "Hill Dwarf": "The 2014 PHB's Dwarf subrace prized for keen intuition and remarkable resilience - stout even by dwarven standards, with extra hit points to prove it.",
+  "Mountain Dwarf": "The 2014 PHB's Dwarf subrace built for battle - strong and hardy, trained from birth in the use of armor.",
+  Eladrin: "Fey elves of the Feywild whose mood shifts with the seasons, able to teleport in a burst of seasonal magic that echoes their current emotional state.",
   Elf: "Graceful, long-lived people with keen senses and a trance-like rest instead of sleep, naturally gifted with darkvision and heightened perception.",
+  Fairy: "Tiny fey with butterfly-like wings, natural fliers who can turn invisible and infuse their tiny weapons with a touch of magical mischief.",
+  Firbolg: "Gentle giant-kin who prefer solitude in deep forests, able to speak with plants and beasts and to vanish briefly from sight when they wish to be unseen.",
+  Genasi: "Descendants of mortals and elemental spirits, each of the four lineages carrying a fragment of Air, Earth, Fire, or Water within their blood and body.",
+  Giff: "Hippopotamus-headed spacefaring folk famed across the planes for their discipline, love of firearms, and imposing physical strength.",
+  Githyanki: "Warlike raiders of the Astral Plane, trained from birth in blade and battle, capable of brief telekinetic bursts of psionic power.",
+  Githzerai: "Disciplined monks of Limbo who shape that plane's chaos through sheer will, gifted with innate psionic defenses and a moment's foresight.",
   Gnome: "Small, endlessly curious tinkerers and spellcasters, naturally resistant to being charmed or having their minds read.",
+  Goblin: "Small, quick, and resourceful folk who slip out of danger easily and can turn a foe's larger size into an opening for a nimble escape.",
   Goliath: "Towering mountain-folk raised on brutal peaks, whose bodies can shrug off the worst of a blow through sheer stone-like endurance.",
+  Grung: "Small, toxic-skinned frog-folk who breathe both air and water, able to poison anyone unwise enough to touch their skin.",
+  Hadozee: "Simian seafarers with gliding membranes between arm and body, able to catch the wind and soften long falls with a glide.",
   Halfling: "Small, nimble, and famously lucky folk, able to slip past danger and reroll a bad stroke of fortune when it truly counts.",
+  "Half-Elf": "Children of human and elven parentage, inheriting a broad social versatility alongside a touch of elven resilience.",
+  "Half-Orc": "Descendants of human and orcish lineage, known for relentless endurance that lets them fight on past wounds that would fell others.",
+  Harengon: "Rabbitfolk with powerful legs and an uncanny knack for good fortune, able to leap great distances and shrug off ill luck.",
+  Hexblood: "Mortals remade by a fey hag's magic, left with an unsettling resilience, a touch of second sight, and the ability to speak with any creature that understands a language.",
+  Hobgoblin: "Disciplined, militaristic goblinoids who fight best in formation, drawing strength and precision from allies fighting at their side.",
   Human: "The most adaptable and populous people of the multiverse, versatile generalists whose greatest strength is a knack for excelling wherever they focus.",
+  Kalashtar: "A union of humanoid and benevolent spirit sharing one body and mind, gifted with innate telepathy and resistance to mental influence.",
+  Kenku: "Cursed, flightless bird-folk who lost their own voice and now perfectly mimic any sound they've heard, masters of forgery and mimicry.",
+  Kobold: "Small, cunning reptilian tricksters who fight best in numbers, using pack tactics to turn an ally's presence into a decisive advantage.",
+  Leonin: "Proud, lion-like folk of the plains, whose thick mane and hide can shrug off a wound and who can rally allies with a fierce roar.",
+  Lizardfolk: "Cold-blooded, pragmatic reptilian survivors equally at home on land or in water, with tough natural hide and a bite to match.",
+  Locathah: "Fish-like aquatic folk able to breathe both air and water, powerful swimmers whose scaled bodies resist the sea's harshest elements.",
+  Loxodon: "Gentle, elephant-headed giants of unshakeable memory and calm, whose thick hide and steady nature make them hard to frighten or wound.",
+  Minotaur: "Bull-headed wanderers with an unerring sense of direction, able to charge down a foe with bone-crushing force.",
   Orc: "Powerful, tireless warriors whose relentless vitality lets them push through exhaustion and keep fighting long after others would fall.",
+  Owlfolk: "Owl-headed folk of silent wings and night-sharp eyes, able to glide on the air and see clearly in total darkness.",
+  Plasmoid: "Sentient oozes shaped like humanoids, able to reshape their gelatinous bodies, squeeze through tiny gaps, and shrug off a blow by simply absorbing it.",
+  Reborn: "The dead returned to unlife with mind and will intact, no longer needing to breathe or eat, and hardened against death's own cold touch.",
+  Satyr: "Fun-loving fey with goat-like legs and horns, resistant to charm and magic and always ready to leap out of a scuffle.",
+  "Sea Elf": "Elves who long ago made their home beneath the waves, swimming as easily as walking and breathing water as naturally as air.",
+  Shifter: "Distant lycanthrope-blooded folk who can briefly call on their beast nature, gaining heightened senses and resilience for a short, fierce burst.",
+  "Simic Hybrid": "Folk reshaped by biomancers with animal traits grafted onto a humanoid frame, gaining a beast's gift such as gills, claws, or a natural carapace.",
+  Tabaxi: "Curious, cat-like wanderers with a hunter's reflexes, quick paws, and an insatiable drive to see what lies over the next horizon.",
+  "Thri-kreen": "Insectoid folk of the desert wastes, with four arms, a chitinous carapace, and no need for sleep, resting instead in a brief meditative trance.",
   Tiefling: "Mortals marked by an infernal bloodline, carrying horns, a tail, and a spark of fiendish magic passed down through their ancestry.",
+  Tortle: "Turtle-like folk with a natural shell they can withdraw into, unhurried wanderers who are almost impossible to knock off their feet.",
+  Triton: "Guardians of the ocean's depths, able to breathe water and air alike and to call up a brief surge of controlled sea and storm.",
+  Vedalken: "Methodical, blue-skinned humanoids of unshakeable focus, whose deliberate minds resist being tricked, charmed, or caught off guard.",
+  Verdan: "Small folk born of goblinoid and human strains bound by a strange telepathic curse, tough enough to shrug off poison and impossible to properly silence.",
+  Warforged: "Living constructs built as soldiers, needing neither sleep nor food and armored by their own integrated, living plating.",
+  "Yuan-Ti Pureblood": "Serpentfolk descended from ancient snake-cultists, nearly human in shape but carrying a serpent's resistance to poison and immunity to charm magic.",
 };
 function getRaceDescription(raceName) {
-  return RACE_DESCRIPTIONS[raceName] || "";
+  if (RACE_DESCRIPTIONS[raceName]) return RACE_DESCRIPTIONS[raceName];
+  const hb = HOMEBREW.races.find((r) => r.name === raceName);
+  return (hb && hb.description) || "";
 }
 
 // Sub-choice traits above (Elven Lineage, Draconic Ancestry, etc.) reuse the
@@ -1014,6 +2003,16 @@ function getRaceDescription(raceName) {
 // FEATURE_CHOICE_DEFS by (lowercased) trait name so findFeatureChoiceDef
 // picks them up automatically wherever a feature/trait row is rendered.
 const RACE_TRAIT_CHOICES = {
+  "celestial revelation": {
+    count: 1,
+    options: ["Radiant Soul", "Radiant Consumption", "Necrotic Shroud"],
+    hint: "pick your celestial transformation",
+    describe: {
+      "Radiant Soul": "You sprout wings (Flying speed = Walking speed) and deal extra radiant damage once per turn.",
+      "Radiant Consumption": "You glow and deal extra radiant damage once per turn, plus radiant damage to creatures near you each turn.",
+      "Necrotic Shroud": "Your eyes darken and ghostly wings appear; you deal extra necrotic damage once per turn and can frighten nearby creatures.",
+    },
+  },
   "draconic ancestry": {
     count: 1,
     options: ["Black", "Blue", "Brass", "Bronze", "Copper", "Gold", "Green", "Red", "Silver", "White"],
@@ -1063,6 +2062,17 @@ const RACE_TRAIT_CHOICES = {
       "Storm's Thunder": "When a creature hits you with an attack, you can deal thunder damage back to it.",
     },
   },
+  "elemental legacy": {
+    count: 1,
+    options: ["Air", "Earth", "Fire", "Water"],
+    hint: "pick your elemental legacy",
+    describe: {
+      Air: "You know the Gust cantrip and have resistance to lightning damage; at higher levels gain Feather Fall and Gaseous Form once each per Long Rest.",
+      Earth: "You know the Mold Earth cantrip and have resistance to acid damage; at higher levels gain Pass without Trace and Meld into Stone once each per Long Rest.",
+      Fire: "You know the Produce Flame cantrip and have resistance to fire damage; at higher levels gain Burning Hands and Aganazzar's Scorcher once each per Long Rest.",
+      Water: "You know the Shape Water cantrip and have resistance to acid damage; at higher levels gain Create or Destroy Water and Water Walk once each per Long Rest.",
+    },
+  },
   "fiendish legacy": {
     count: 1,
     options: ["Abyssal", "Chthonic", "Infernal"],
@@ -1071,6 +2081,50 @@ const RACE_TRAIT_CHOICES = {
       Abyssal: "Resistance to poison damage; at higher levels cast Ray of Sickness, then Hold Person, once each per Long Rest.",
       Chthonic: "Resistance to necrotic damage; at higher levels cast Ray of Sickness (necrotic), then Mind Whip (or Enthrall), once each per Long Rest.",
       Infernal: "Resistance to fire damage; at higher levels cast Hellish Rebuke, then Darkness, once each per Long Rest.",
+    },
+  },
+  shifting: {
+    count: 1,
+    options: ["Beasthide", "Longtooth", "Swiftstride", "Wildhunt"],
+    hint: "pick your Shifting type",
+    describe: {
+      Beasthide: "While shifted, gain extra temporary hit points and a bonus to AC.",
+      Longtooth: "While shifted, your bite becomes a natural weapon dealing extra damage.",
+      Swiftstride: "While shifted, your speed increases and you can Disengage as a bonus action when you shift.",
+      Wildhunt: "While shifted, you can't be surprised (unless incapacitated) and gain advantage on Wisdom checks.",
+    },
+  },
+  "animal enhancement": {
+    count: 1,
+    options: ["Manta Glide", "Nimble Climber", "Underwater Adaptation"],
+    hint: "pick your animal enhancement",
+    describe: {
+      "Manta Glide": "You have a Flying speed while gliding downward, and later gain resistance to bludgeoning damage while gliding.",
+      "Nimble Climber": "You have a Climbing speed equal to your Walking speed and advantage on checks/saves to avoid falling.",
+      "Underwater Adaptation": "You have a Swimming speed and can breathe underwater; you later gain a swim-friendly ranged attack.",
+    },
+  },
+  "fey step season": {
+    count: 1,
+    options: ["Autumn", "Winter", "Spring", "Summer"],
+    hint: "pick your Fey Step season",
+    describe: {
+      Autumn: "A creature within 5 feet of your destination must succeed on a Wisdom save or be charmed until the end of your next turn.",
+      Winter: "A creature within 5 feet of your destination must succeed on a Wisdom save or be frightened until the end of your next turn.",
+      Spring: "A creature within 5 feet of your destination regains a small number of hit points (see your book for the exact amount).",
+      Summer: "A creature within 5 feet of your destination takes fire damage equal to your Proficiency Bonus.",
+    },
+  },
+  origin: {
+    count: 1,
+    options: ["Cursed", "Doomed", "Faithful", "Malignant", "Vigilant"],
+    hint: "pick your Reborn origin",
+    describe: {
+      Cursed: "You gain proficiency in one saving throw of your choice.",
+      Doomed: "You have resistance to necrotic damage, and once per Long Rest you can turn a failed death saving throw into a success.",
+      Faithful: "You know the Guidance and Resistance cantrips; Wisdom is your spellcasting ability for them.",
+      Malignant: "You know the Chill Touch cantrip, and at level 3+ can cast False Life once per Long Rest without a material component; Intelligence, Wisdom, or Charisma is your spellcasting ability (your choice).",
+      Vigilant: "You have proficiency in the Perception skill, and you can't be surprised while you are conscious.",
     },
   },
   // Human's own two choice-traits. findRaceSubChoiceTrait only surfaces the
@@ -1114,6 +2168,20 @@ const RACE_TRAIT_CHOICES = {
     // uses for Expertise-granting picks, just without doubling the bonus.
     grantsSkillProficiency: true,
   },
+  // Hill/Mountain Dwarf's own "Tool Proficiency" trait (see RACE_TRAITS
+  // above) - previously plain flavor text with no picker at all. Adding it
+  // here makes the Features-tab editor offer the same choice UI as every
+  // other choice trait; computeAutomaticProficiencies (see the
+  // Proficiencies & Training section above CLASS_ARMOR_PROFICIENCIES)
+  // reads the resulting " Chosen: X." suffix straight off this feature by
+  // name, so no grantsXProficiency flag is needed here the way Skillful
+  // needed one - unlike a skill pick, there's no separate Tools tab
+  // checkbox this needs to also tick.
+  "tool proficiency": {
+    count: 1,
+    options: ["Smith's Tools", "Brewer's Supplies", "Mason's Tools"],
+    hint: "pick your dwarven tool proficiency",
+  },
 };
 for (const [key, def] of Object.entries(RACE_TRAIT_CHOICES)) {
   FEATURE_CHOICE_DEFS[key] = def;
@@ -1141,14 +2209,15 @@ function deriveSensesFromRace(raceName) {
 
 // Given a character's Features companion `limited_uses` array, finds any
 // species sub-choice trait (Elven Lineage, Draconic Ancestry, Fiendish
-// Legacy, etc. - see RACE_TRAIT_CHOICES above) that's already been resolved
-// and returns its chosen value (e.g. "Wood Elf") - used by the Overview
-// tab to show "Elf (Wood Elf)" instead of just "Elf". Returns "" if the
+// Legacy, etc. - see RACE_TRAIT_CHOICES above - or a homebrew Ancestry, see
+// HOMEBREW.choiceDefs/homebrewAncestries) that's already been resolved and
+// returns its chosen value (e.g. "Wood Elf") - used by the Overview tab to
+// show "Elf (Wood Elf)" instead of just "Elf". Returns "" if the
 // character's race has no such trait, or it hasn't been chosen yet.
 function resolveRaceSubChoice(limitedUses) {
   for (const item of limitedUses || []) {
     const lower = String((item && item.name) || "").trim().toLowerCase();
-    if (RACE_TRAIT_CHOICES[lower]) {
+    if (RACE_TRAIT_CHOICES[lower] || HOMEBREW.choiceDefs[lower]) {
       const { chosen } = splitChosenSuffix(item.description);
       if (chosen.length) return chosen[0];
     }
@@ -1160,17 +2229,22 @@ function resolveRaceSubChoice(limitedUses) {
 // matching RACE_TRAIT_CHOICES entry - e.g. Dragonborn -> "Draconic
 // Ancestry" (Black/Blue/Brass/etc., each with its own damage type/
 // resistance), Elf -> "Elven Lineage", Tiefling -> "Fiendish Legacy", and
-// so on. A species' ancestry (in the player's sense - which kind of
-// dragon, which elven lineage) is a real, separate pick from the species
-// itself, not just another name for it - this is what lets Page 1 of both
-// character wizards show that pick as its own dedicated dropdown right
-// next to Race (see buildCharSheetFields), instead of it only surfacing
-// later as a generic feature-choice picker buried on the Features page.
+// so on - or, via getRaceTraits' synthetic trait, a homebrew Ancestry
+// registered against this race name in HOMEBREW.choiceDefs (see
+// buildHomebrewMechanicDefs/homebrewAncestries). A species' ancestry (in
+// the player's sense - which kind of dragon, which elven lineage) is a
+// real, separate pick from the species itself, not just another name for
+// it - this is what lets Page 1 of both character wizards show that pick
+// as its own dedicated dropdown right next to Race (see
+// buildCharSheetFields), instead of it only surfacing later as a generic
+// feature-choice picker buried on the Features page - and homebrew
+// Ancestries now get the exact same treatment as the built-in ones.
 function findRaceSubChoiceTrait(raceName) {
   const traits = getRaceTraits(raceName);
   for (const t of traits) {
     const lower = String((t && t.name) || "").trim().toLowerCase();
     if (RACE_TRAIT_CHOICES[lower]) return { traitName: t.name, key: lower, def: RACE_TRAIT_CHOICES[lower] };
+    if (HOMEBREW.choiceDefs[lower]) return { traitName: t.name, key: lower, def: HOMEBREW.choiceDefs[lower] };
   }
   return null;
 }
@@ -1207,9 +2281,10 @@ const FEATURE_RESOURCE_DEFS = {
   "lay on hands": { max: (ctx) => (Number(ctx.level) || 1) * 5, rest: "Long", pool: true },
   // Species/ancestry traits that follow the same "PB uses per Long Rest"
   // template as Favored Enemy above (see RACE_TRAITS - Dragonborn's Breath
-  // Weapon reads "a number of times equal to your Proficiency Bonus,
-  // regaining all uses on a Long Rest").
+  // Weapon and Aasimar's Healing Hands both read "a number of times equal
+  // to your Proficiency Bonus, regaining all uses on a Long Rest").
   "breath weapon": { max: (ctx) => proficiencyBonusForLevel(ctx.level), rest: "Long" },
+  "healing hands": { max: (ctx) => proficiencyBonusForLevel(ctx.level), rest: "Long" },
 };
 // Each of the three lookups below checks the built-in FEATURE_RESOURCE_DEFS
 // first, falling back to HOMEBREW.resourceDefs (built by
@@ -1435,6 +2510,36 @@ async function applyProficiencyToSkill(app, mainFile, skillName) {
   }
 }
 
+// grantsSpells (Magic Initiate - see that FEATURE_CHOICE_DEFS entry above,
+// bug report #3) - a feature whose chosen options aren't a flavor pick at
+// all but real spells the character now always has access to, so each one
+// gets pushed onto the Spells companion file exactly like SpellsTracker's
+// own "Add Spell" button would, instead of leaving the player to notice
+// they're "missing" and add them by hand on the Spells tab (where there's
+// no cue they were ever granted here in the first place). Idempotent via
+// the same "skip if already present" check SpellsTracker's Add Spell uses -
+// safe to call every time this feature shows up in applyFeatureSideEffects'
+// loop (new pick, re-save, Update Character Sheet re-applying everything
+// currently present) without ever duplicating an entry. The "(Class
+// cantrip/1st-level)" qualifier the picker's own option labels carry (see
+// options() there) is stripped back off here, since the Spells file only
+// ever stores the bare spell name as a [[link]].
+async function applySpellGrantSideEffect(app, mainFile, label) {
+  const spellName = String(label || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+  if (!spellName) return;
+  try {
+    const spellsFile = await ensureSpellsSubFile(app, mainFile);
+    const linkStr = `[[${spellName}]]`;
+    await app.fileManager.processFrontMatter(spellsFile, (fm) => {
+      fm.spells = fm.spells || [];
+      if (!fm.spells.includes(linkStr)) fm.spells.push(linkStr);
+    });
+  } catch (e) {
+    // Non-fatal - same reasoning as every other side effect here: the
+    // feature itself is still saved on the Features tab either way.
+  }
+}
+
 function abilityModFromScore(score) {
   const s = Number(score);
   return isNaN(s) ? 0 : Math.floor((s - 10) / 2);
@@ -1656,6 +2761,11 @@ async function applyFeatureSideEffects(app, mainFile, features, levelOverride) {
         await applyProficiencyToSkill(app, mainFile, skillName);
       }
     }
+    if (def && def.grantsSpells) {
+      for (const label of feat.chosen || []) {
+        await applySpellGrantSideEffect(app, mainFile, label);
+      }
+    }
     const statBonusDef = findHomebrewMechanicDef(HOMEBREW.statBonusDefs, feat.name);
     if (statBonusDef) await applyStatBonusSideEffect(app, mainFile, statBonusDef, feat.name);
     const defenseDef = findHomebrewMechanicDef(HOMEBREW.defenseDefs, feat.name);
@@ -1676,39 +2786,265 @@ async function applyFeatureSideEffects(app, mainFile, features, levelOverride) {
 // placeholder otherwise, so a class/subclass/level not covered here still
 // works exactly as before.
 const SUBCLASS_LEVEL_FEATURES = {
+  "Artificer": {
+    "Alchemist": {
+      3: [f("Alchemist Spells & Experimental Elixir", "You always have certain healing/support spells prepared, and can brew a random beneficial elixir as a bonus action.")],
+    },
+    "Armorer": {
+      3: [f("Arcane Armor", "Your armor becomes Arcane Armor with a Guardian or Infiltrator arm, giving you a new attack option and no Strength/Dexterity requirement.")],
+    },
+    "Artillerist": {
+      3: [f("Eldritch Cannon", "As a bonus action, summon a Tiny magic cannon (Flamethrower, Force Ballista, or Protector) that fights or shields for you.")],
+    },
+    "Battle Smith": {
+      3: [f("Battle Ready & Steel Defender", "Add your Intelligence modifier to melee attacks with magic weapons, and build a Steel Defender companion that fights and protects you.")],
+    },
+  },
   "Barbarian": {
+    "Ancestral Guardian": {
+      3: [f("Ancestral Protectors", "Spirits guard the target of your first hit each turn - other creatures attacking someone else have disadvantage and deal half damage.")],
+      6: [f("Spirit Shield", "While raging, use your reaction to reduce the damage a nearby ally takes.")],
+      10: [f("Consult the Spirits", "Cast Augury or Clairvoyance without a spell slot, once per Short or Long Rest.")],
+      14: [f("Vengeful Ancestors", "Your Spirit Shield now also deals damage back to the attacker.")],
+    },
+    "Battlerager": {
+      3: [f("Battlerager Armor", "Proficient with spiked armor, and can use a bonus action to deal extra piercing damage while grappling.")],
+      6: [f("Reckless Abandon", "Gain temporary hit points whenever you use Reckless Attack while raging.")],
+      10: [f("Battlerager Charge", "Use a bonus action to Dash while wearing spiked armor.")],
+      14: [f("Spiked Retribution", "A creature that hits you in melee while you're raging takes piercing damage back.")],
+    },
     "Berserker": {
       3: [f("Frenzy", "Make one extra melee weapon attack as part of your Rage bonus action, gaining a level of exhaustion when the rage ends.")],
       6: [f("Mindless Rage", "You can't be charmed or frightened while raging.")],
       10: [f("Intimidating Presence", "Use your action to frighten a creature you can see within 30 feet.")],
       14: [f("Retaliation", "Use your reaction to make a melee attack against a creature that damages you within 5 feet.")],
     },
+    "Storm Herald": {
+      3: [f("Storm Aura", "Choose Desert, Sea, or Tundra - gain a passive aura while raging that grows more powerful as you level.")],
+      6: [f("Storm Soul", "A permanent elemental benefit matching your chosen environment (resistance, minor healing, or better vision).")],
+      10: [f("Shielding Storm", "Your Storm Aura now also grants resistance to one damage type to allies inside it.")],
+      14: [f("Raging Storm", "Your Storm Aura gains a powerful new effect based on your chosen environment.")],
+    },
+    "Totem Warrior": {
+      3: [f("Spirit Seeker & Totem Spirit", "Ritual-cast Beast Sense or Augury, and choose a totem animal (Bear, Eagle, Wolf, and more) for a passive benefit while raging.")],
+      6: [f("Aspect of the Beast", "A permanent minor benefit themed to your totem animal, usable even outside of rage.")],
+      10: [f("Spirit Walker", "Cast Commune with Nature as a ritual.")],
+      14: [f("Totemic Attunement", "A powerful combat benefit themed to your totem animal, active while you're raging.")],
+    },
+    "Zealot": {
+      3: [f("Divine Fury & Warrior of the Gods", "Extra Radiant or Necrotic damage on your first hit each turn while raging, and you're unusually easy to bring back from death.")],
+      6: [f("Fanatical Focus", "Once per rage, reroll a failed saving throw.")],
+      10: [f("Zealous Presence", "As a bonus action, grant nearby allies advantage on attack rolls and saving throws for one turn, once per Long Rest.")],
+      14: [f("Rage Beyond Death", "You can't drop below 1 hit point while raging.")],
+    },
   },
   "Bard": {
+    "College of Creation": {
+      3: [f("Mote of Potential & Performance of Creation", "Spend Bardic Inspiration to set up a bigger bonus for later, and conjure a temporary Tiny nonmagical object out of sound and light.")],
+      6: [f("Animating Performance", "Animate an object into a small dancing or fighting companion for the encounter.")],
+      10: [f("Enduring Creations", "Your Performance of Creation objects and Animating Performance companions hold together longer and can be bigger.")],
+      14: [f("Creative Crescendo", "Your Performance of Creation can produce multiple objects at once, or briefly duplicate a summoned creature.")],
+    },
+    "College of Eloquence": {
+      3: [f("Silver Tongue & Unsettling Words", "Treat a Persuasion or Deception roll of 9 or lower as a 10, and spend Bardic Inspiration to weaken a foe's next saving throw.")],
+      6: [f("Unfailing Inspiration & Universal Speech", "A spent Bardic Inspiration die isn't used up on a failed roll, and you can cast Tongues at will without a spell slot.")],
+      10: [f("Unsettling Words (Improved)", "Your persuasive presence keeps growing, further unsettling those who oppose you in an argument or a fight.")],
+      14: [f("Infectious Inspiration", "When a creature succeeds using your Bardic Inspiration die, you can give another die away for free.")],
+    },
+    "College of Glamour": {
+      3: [f("Mantle of Inspiration & Enthralling Performance", "Bardic Inspiration also grants temporary hit points and a free reaction move, and a performance can briefly charm a crowd.")],
+      6: [f("Mantle of Majesty", "Cast Command at will as a bonus action for up to one minute, without a spell slot.")],
+      10: [f("Fey Grace", "Your fey glamour grows harder to resist and easier to maintain.")],
+      14: [f("Unbreakable Majesty", "As a bonus action, become strikingly beautiful, forcing anyone who wants to attack you to save first.")],
+    },
     "College of Lore": {
       3: [f("Cutting Words", "Use a Bardic Inspiration die as a reaction to weaken a nearby enemy's attack, ability check, or damage roll.")],
       6: [f("Additional Magical Secrets", "Learn two spells of your choice from any class's spell list.")],
       10: [f("Wide Learning", "Your accumulated lore keeps expanding your repertoire of secrets and tricks.")],
       14: [f("Peerless Skill", "Add a Bardic Inspiration die to your own ability check when you'd otherwise fail it.")],
     },
+    // Added 2026-09-21 from Forgotten Realms: Heroes of Faerûn - see
+    // vault-map.md for sourcing caveats (secondary-source reconstruction,
+    // dnd2024.wikidot.com was unreachable this session).
+    "College of the Moon": {
+      3: [
+        f("Moonshae Folktales", "As a Magic action, you draw on primal folktales to empower yourself with one of several beneficial effects until you use this feature again."),
+        f("Primal Lorist", "You learn Druidic and one Druid cantrip of your choice (it doesn't count against your cantrips known), and you gain proficiency in one of Animal Handling, Insight, Medicine, Nature, Perception, or Survival."),
+      ],
+      6: [f("Blessing of the Moonwells", "You always have Moonbeam prepared. You can cast it once without a spell slot, and you must finish a Long Rest before doing so again this way; you can also cast it using a spell slot of 2nd level or higher.")],
+      14: [f("Bolstered Folktales", "You can use certain Moonshae Folktales options without expending Bardic Inspiration, and one option also lets you briefly teleport.")],
+    },
+    "College of Swords": {
+      3: [f("Fighting Style & Blade Flourish", "Gain a Fighting Style, and can spend a Bardic Inspiration die on an attack for a Defensive, Slashing, or Mobile Flourish.")],
+      6: [f("Extra Attack", "You can attack twice, instead of once, whenever you take the Attack action on your turn.")],
+      10: [f("Precise Flourish", "Your swordplay grows more precise, striking truer with every Blade Flourish.")],
+      14: [f("Master's Flourish", "Use a free Bardic Inspiration die on a Blade Flourish instead of spending one of your own.")],
+    },
+    "College of Valor": {
+      3: [f("Combat Inspiration", "A Bardic Inspiration die can boost an ally's weapon damage roll or AC instead of the usual uses.")],
+      6: [f("Extra Attack", "You can attack twice, instead of once, whenever you take the Attack action on your turn.")],
+      10: [f("Battle-Tested", "Your battle-honed performances keep pace with your growing martial prowess.")],
+      14: [f("Battle Magic", "Make a weapon attack as a bonus action immediately after casting a bard spell.")],
+    },
+    "College of Whispers": {
+      3: [f("Psychic Blades & Words of Terror", "Deal bonus Psychic damage once per turn on a hit, and plant a seed of fear in private conversation.")],
+      6: [f("Mantle of Whispers", "Capture the shadow of a dying humanoid to briefly disguise yourself as them.")],
+      10: [f("Shadow Presence", "Your unsettling presence keeps sharpening, feeding on the fear of those around you.")],
+      14: [f("Shadow Lore", "Magically compel a creature to fear you and to never reveal what you discussed.")],
+    },
   },
   "Cleric": {
+    "Arcana Domain": {
+      2: [f("Arcane Initiate", "Learn two wizard cantrips, and gain proficiency in the Arcana skill.")],
+      6: [f("Spell Breaker", "When you heal a creature with a spell of 1st level or higher, you can also end one spell affecting it.")],
+      8: [f("Potent Spellcasting", "Add your Wisdom modifier to the damage of your cleric cantrips.")],
+      17: [f("Arcane Mastery", "Choose four wizard spells as always-prepared ritual and utility options.")],
+    },
+    "Death Domain": {
+      2: [f("Reaper", "Your necromancy cantrips can target one extra creature, and you can learn one from any class's list.")],
+      6: [f("Inescapable Destruction", "Your Necrotic damage ignores resistance to Necrotic damage.")],
+      8: [f("Divine Strike", "Once per turn, add extra Necrotic damage to a weapon hit.")],
+      17: [f("Improved Reaper", "Your damaging necromancy spells that normally target one creature can now target two.")],
+    },
+    "Forge Domain": {
+      2: [f("Blessing of the Forge", "Magically enhance a nonmagical weapon or armor with a +1 bonus until your next Long Rest.")],
+      6: [f("Soul of the Forge", "Resistance to Fire damage, and a bonus to AC while wearing heavy armor.")],
+      8: [f("Divine Strike", "Once per turn, add extra Fire damage to a weapon hit.")],
+      17: [f("Saint of Forge and Fire", "Your fire resistance becomes immunity, and your Blessing of the Forge grows stronger.")],
+    },
+    "Grave Domain": {
+      2: [f("Circle of Mortality & Eyes of the Grave", "Your healing spells work at maximum effect on creatures at 0 hit points, and you can sense undead nearby.")],
+      6: [f("Sentinel at Death's Door", "Use your reaction to turn a critical hit against a nearby creature into a normal hit.")],
+      8: [f("Potent Spellcasting", "Add your Wisdom modifier to the damage of your cleric cantrips.")],
+      17: [f("Keeper of Souls", "When you reduce an undead-fearing creature to 0 hit points, regain a spell slot.")],
+    },
+    "Knowledge Domain": {
+      2: [f("Blessings of Knowledge & Knowledge of the Ages", "Gain extra languages and skills, and temporarily gain proficiency with any skill or tool via Channel Divinity.")],
+      6: [f("Channel Divinity: Read Thoughts", "Read a creature's surface thoughts, with the option to also charm it.")],
+      8: [f("Potent Spellcasting", "Add your Wisdom modifier to the damage of your cleric cantrips.")],
+      17: [f("Visions of the Past", "Magically glimpse an object's or a place's recent past.")],
+    },
     "Life Domain": {
       2: [f("Disciple of Life", "Your healing spells restore extra hit points on top of what they normally would.")],
       6: [f("Blessed Healer", "Spells you cast that heal others also restore a few hit points to you.")],
       8: [f("Divine Strike", "Once per turn, add extra Radiant damage to a weapon hit.")],
       17: [f("Supreme Healing", "Your healing spells restore the maximum possible number of hit points instead of rolling.")],
     },
+    "Light Domain": {
+      2: [f("Warding Flare", "Use your reaction to impose disadvantage on an attacker's roll against you or an ally.")],
+      6: [f("Improved Warding Flare", "Warding Flare gains an extra use, and you can regain a use of it by expending a spell slot.")],
+      8: [f("Potent Spellcasting", "Add your Wisdom modifier to the damage of your cleric cantrips.")],
+      17: [f("Corona of Light", "Emit bright light in a wide radius, and give allies inside advantage on saves against your light-based spells' effects.")],
+    },
+    "Nature Domain": {
+      2: [f("Acolyte of Nature & Charm Animals and Plants", "Learn an extra druid cantrip and skill, and Channel Divinity to charm beasts and plant creatures nearby.")],
+      6: [f("Dampen Elements", "Use your reaction to grant resistance against an incoming acid, cold, fire, lightning, or thunder attack.")],
+      8: [f("Divine Strike", "Once per turn, add extra damage of a type you choose to a weapon hit.")],
+      17: [f("Master of Nature", "Command friendly beasts and plant creatures within range.")],
+    },
+    "Order Domain": {
+      2: [f("Voice of Authority & Order's Demand", "Allies can use their reaction to attack a creature you cast a spell on, and you can magically command creatures to kneel.")],
+      6: [f("Embodiment of the Law", "Cast Command using Channel Divinity without expending a spell slot, a limited number of times.")],
+      8: [f("Divine Strike", "Once per turn, add extra Psychic damage to a weapon hit.")],
+      17: [f("Order's Wrath", "Your weapon attacks deal extra Psychic damage against a creature you've magically commanded.")],
+    },
+    "Peace Domain": {
+      2: [f("Emboldening Bond", "Link a few allies together, so each gains a bonus die on rolls while another bonded ally is nearby.")],
+      6: [f("Protective Bond", "A bonded ally can teleport to intercept an attack meant for another bonded creature.")],
+      8: [f("Potent Spellcasting", "Add your Wisdom modifier to the damage of your cleric cantrips.")],
+      17: [f("Expert Divination", "Cast a divination spell for free using a spell slot, once per Long Rest.")],
+    },
+    "Tempest Domain": {
+      2: [f("Wrath of the Storm", "Use your reaction to deal Lightning or Thunder damage to a creature that hits you in melee.")],
+      6: [f("Destructive Wrath", "Guarantee maximum damage on your Wrath of the Storm or a thunder/lightning cleric spell, using Channel Divinity.")],
+      8: [f("Divine Strike", "Once per turn, add extra Thunder damage to a weapon hit.")],
+      17: [f("Stormborn", "Gain a flying speed whenever you're outdoors.")],
+    },
+    "Trickery Domain": {
+      2: [f("Blessing of the Trickster", "Touch a creature to grant it advantage on Dexterity (Stealth) checks.")],
+      6: [f("Channel Divinity: Invoke Duplicity", "Create an illusory duplicate of yourself to cast spells through and flank enemies with.")],
+      8: [f("Divine Strike", "Once per turn, add extra Poison damage to a weapon hit.")],
+      17: [f("Improved Duplicity", "Your illusory duplicate can now be created up to 30 feet away, and both can move independently.")],
+    },
+    "Twilight Domain": {
+      2: [f("Eyes of Night & Vigilant Blessing", "See in magical darkness, and give an ally advantage on their next initiative roll.")],
+      6: [f("Channel Divinity: Twilight Sanctuary", "A soothing 30-foot aura that grants temporary hit points or ends fear and charm on those inside it.")],
+      8: [f("Divine Strike", "Once per turn, add extra Radiant or Necrotic damage to a weapon hit.")],
+      17: [f("Twilight Shroud", "Your Twilight Sanctuary now also grants half cover to creatures inside it.")],
+    },
+    "War Domain": {
+      2: [f("War Priest", "Make an extra weapon attack as a bonus action, a limited number of times per Long Rest.")],
+      6: [f("Channel Divinity: Guided Strike", "Add +10 to an attack roll after seeing it miss.")],
+      8: [f("Divine Strike", "Once per turn, add extra damage to a weapon hit.")],
+      17: [f("Avatar of Battle", "Gain resistance to nonmagical bludgeoning, piercing, and slashing damage.")],
+    },
   },
   "Druid": {
+    "Circle of Dreams": {
+      2: [f("Balm of the Summer Court", "A pool of Fey energy, refreshed on a rest, that you can spend to heal allies as a bonus action.")],
+      6: [f("Hearth of Moonlight and Shadow", "You and your group can rest safely and undetected while traveling in the wild.")],
+      10: [f("Hidden Paths", "Use a bonus action to teleport yourself, or an ally, a short distance.")],
+      14: [f("Walker in Dreams", "Cast Dream, Scrying, or Teleportation Circle once without a spell slot, per Long Rest.")],
+    },
+    "Circle of Spores": {
+      2: [f("Circle Spells & Halo of Spores", "Gain thematic necrotic spells always prepared, and deal Necrotic damage to creatures that hit you in melee.")],
+      6: [f("Fungal Infestation", "Animate a slain Small or Medium creature into a temporary zombie-like minion.")],
+      10: [f("Spreading Spores", "Hurl your Halo of Spores' damage at a target from a distance instead.")],
+      14: [f("Fungal Body", "You're immune to critical hits, and don't need to eat, drink, or breathe.")],
+    },
+    "Circle of Stars": {
+      2: [f("Starry Form", "After casting a spell, transform into a Chalice, Archer, or Dragon constellation for a bonus effect.")],
+      6: [f("Cosmic Omen", "Roll a die at the start of the day to later grant allies advantage or impose disadvantage once.")],
+      10: [f("Twinkling Constellations", "Your Starry Form transformation lasts longer, and its benefits grow stronger.")],
+      14: [f("Full of Stars", "Become partially incorporeal, gaining resistance to bludgeoning, piercing, and slashing damage.")],
+    },
     "Circle of the Land": {
       2: [f("Circle Spells & Natural Recovery", "Always-prepared spells tied to your chosen terrain, and recover some expended spell slots on a Short Rest.")],
       6: [f("Land's Aid", "Spend a spell slot to heal a nearby creature and damage a nearby enemy with your terrain's power.")],
       10: [f("Nature's Ward", "Immunity to poison and disease, and you can't be frightened by creatures native to your terrain.")],
       14: [f("Nature's Sanctuary", "Creatures of your terrain have trouble targeting you in combat, and you gain resistance to their damage.")],
     },
+    "Circle of the Moon": {
+      2: [f("Combat Wild Shape", "Wild Shape as a bonus action, and can spend spell slots to heal while shapeshifted.")],
+      6: [f("Primal Strike", "Your attacks in Wild Shape form count as magical for overcoming resistance and immunity.")],
+      10: [f("Elemental Wild Shape", "Spend spell slots to transform into an air, earth, fire, or water elemental.")],
+      14: [f("Thousand Forms", "Cast Alter Self at will.")],
+    },
+    "Circle of the Shepherd": {
+      2: [f("Speech of the Woods & Spirit Totem", "Talk to beasts, and summon a Bear, Hawk, or Unicorn spirit that aids nearby allies.")],
+      6: [f("Mighty Summoner", "Beasts and fey you summon are tougher and hit harder than usual.")],
+      10: [f("Guardian Spirit", "Your Spirit Totem heals nearby allies whenever it damages a foe.")],
+      14: [f("Faithful Summons", "If you drop to 0 hit points, automatically summon protective spirits to defend you.")],
+    },
+    "Circle of Wildfire": {
+      2: [f("Circle Spells & Summon Wildfire Spirit", "Always-prepared fire and healing spells, and a fiery spirit companion that can heal allies or damage foes.")],
+      6: [f("Enhanced Bond", "Your spirit's attacks add your Wisdom modifier, and its damage can be redirected into healing.")],
+      10: [f("Cauterizing Flames", "When a creature dies near your spirit, choose to heal an ally or damage an enemy nearby.")],
+      14: [f("Blazing Revival", "Once per Long Rest, come back from 0 hit points in a burst of flame.")],
+    },
   },
   "Fighter": {
+    "Arcane Archer": {
+      3: [f("Arcane Archer Lore & Arcane Shot", "Learn a couple of wizard cantrips, and imbue an arrow with a magical shot option such as Banishing, Beguiling, or Seeking.")],
+      7: [f("Curving Shot", "Redirect a missed Arcane Shot arrow to strike another target nearby.")],
+      10: [f("Additional Arcane Shot Option", "Learn one more Arcane Shot option.")],
+      15: [f("Ever-Ready Shot", "Regain one use of Arcane Shot for free if you have none left when you roll initiative.")],
+      18: [f("Additional Arcane Shot Option (2)", "Learn another Arcane Shot option.")],
+    },
+    "Battle Master": {
+      3: [f("Combat Superiority & Student of War", "Learn a set of Maneuvers fueled by Superiority Dice, and gain a tool proficiency.")],
+      7: [f("Know Your Enemy", "Study a creature briefly to learn how its capabilities compare to yours.")],
+      10: [f("Improved Combat Superiority (d10)", "Your Superiority Dice become d10s.")],
+      15: [f("Relentless", "Regain one Superiority Die for free if you have none left when you roll initiative.")],
+      18: [f("Improved Combat Superiority (d12)", "Your Superiority Dice become d12s.")],
+    },
+    "Cavalier": {
+      3: [f("Bonus Proficiency & Born to the Saddle", "Gain a skill proficiency, and mount or dismount easily, never falling from your mount involuntarily.")],
+      7: [f("Unwavering Mark", "Mark a creature you hit, gaining a punishing reaction if it attacks someone other than you.")],
+      10: [f("Warding Maneuver", "Use your reaction to add a die to your or a nearby ally's AC or saving throw against an attack.")],
+      15: [f("Vigilant Defender", "Take a special reaction on every creature's turn but your own.")],
+      18: [f("Ferocious Charger", "A creature you hit after moving at least 10 feet toward it must save or fall prone.")],
+    },
     "Champion": {
       3: [f("Improved Critical", "Your weapon attacks score a critical hit on a roll of 19 or 20.")],
       7: [f("Remarkable Athlete", "Add half your proficiency bonus to Strength, Dexterity, or Constitution checks that don't already use it, and jump farther.")],
@@ -1716,32 +3052,308 @@ const SUBCLASS_LEVEL_FEATURES = {
       15: [f("Superior Critical", "Your weapon attacks score a critical hit on a roll of 18-20.")],
       18: [f("Survivor", "Regain hit points at the start of your turn if you're below half your hit point maximum.")],
     },
+    "Echo Knight": {
+      3: [f("Manifest Echo", "Summon a spectral echo of yourself that you can attack, move, and swap places through.")],
+      7: [f("Unleash Incarnation", "Make an extra attack originating from your echo's position.")],
+      10: [f("Echo Avatar", "Send your echo far away to scout, largely unaffected by harm.")],
+      15: [f("Shadow Martyr", "Your echo can intercept an attack or effect meant for a nearby creature.")],
+      18: [f("Legion of One", "Manifest two echoes at once.")],
+    },
+    "Eldritch Knight": {
+      3: [f("Spellcasting & Weapon Bond", "Learn wizard cantrips and spells (mostly Abjuration and Evocation), and bond with weapons you can summon to your hand.")],
+      7: [f("War Magic", "Make a weapon attack as a bonus action immediately after casting a cantrip.")],
+      10: [f("Eldritch Strike", "A creature you hit has disadvantage on its next saving throw against your next spell.")],
+      15: [f("Arcane Charge", "Teleport up to 30 feet as part of your Action Surge.")],
+      18: [f("Improved War Magic", "Make a weapon attack as a bonus action after casting any spell, not just a cantrip.")],
+    },
+    "Psi Warrior": {
+      3: [f("Psionic Power", "Gain Psionic Energy dice to boost attacks or AC, and telekinetically move objects or yourself.")],
+      7: [f("Telekinetic Adept", "Telekinetically move creatures, or use telekinesis for a Shove- or Trip-like effect.")],
+      10: [f("Guarded Mind", "Resistance to Psychic damage, and can spend a Psionic die to end being charmed or frightened.")],
+      15: [f("Bulwark of Force", "Grant yourself and nearby allies resistance to damage using your telekinetic power.")],
+      18: [f("Telekinetic Master", "Cast Telekinesis without a spell slot, once per Long Rest.")],
+    },
+    "Purple Dragon Knight": {
+      3: [f("Rallying Cry", "After using Second Wind, inspire nearby allies with a few temporary hit points.")],
+      7: [f("Royal Envoy", "Gain proficiency (or expertise) in Persuasion, and advantage on checks made to influence crowds.")],
+      10: [f("Inspiring Surge", "When you use Action Surge, a nearby ally can also make an extra attack.")],
+      15: [f("Bulwark", "Nearby allies also gain the benefit of your Indomitable feature.")],
+      18: [f("Hold the Line", "Your leadership on the battlefield reaches even further, rallying every ally who can see you.")],
+    },
+    "Rune Knight": {
+      3: [f("Bonus Proficiencies & Rune Carver", "Gain giant-related proficiencies, and carve magic runes (Cloud, Fire, Frost, Stone, and more) into your gear for special effects.")],
+      7: [f("Giant's Might", "Use a bonus action to grow to Large size, gaining extra damage and advantage on Strength checks.")],
+      10: [f("Additional Rune", "Learn one more rune.")],
+      15: [f("Great Stature", "You permanently grow slightly, and your Giant's Might damage increases.")],
+      18: [f("Master of Runes", "Use each of your runes' special effects twice per Long Rest instead of once.")],
+    },
+    "Samurai": {
+      3: [f("Bonus Proficiency & Fighting Spirit", "Gain a skill or language, and use a bonus action to grant yourself temporary hit points and advantage on attacks for a moment.")],
+      7: [f("Elegant Courtier", "Add your Wisdom modifier to Persuasion checks, and gain proficiency (or expertise) in a saving throw.")],
+      10: [f("Tireless Spirit", "Regain one use of Fighting Spirit for free if you have none left when you roll initiative.")],
+      15: [f("Rapid Strike", "Forgo advantage on an attack roll to make an extra weapon attack.")],
+      18: [f("Strength before Death", "When reduced to 0 hit points without being killed outright, act one more time before falling.")],
+    },
   },
   "Monk": {
-    "Warrior of the Open Hand": {
+    "Drunken Master": {
+      3: [f("Bonus Proficiencies & Drunken Technique", "Gain proficiency with brewer's tools, and Flurry of Blows grants a bonus Disengage and extra movement that looks like a stumble.")],
+      6: [f("Tipsy Sway", "Spend a Focus Point to seemingly stumble and fall, then stand back up as a bonus action, avoiding an attack.")],
+      11: [f("Drunkard's Luck", "Spend a Focus Point to gain advantage on a saving throw you're about to fail.")],
+      17: [f("Intoxicated Frenzy", "Your Flurry of Blows can strike up to three different targets.")],
+    },
+    "Four Elements": {
+      3: [f("Disciple of the Elements", "Spend Focus Points to cast elemental-themed effects such as Fangs of the Fire Snake or Water Whip.")],
+      6: [f("Additional Elemental Discipline", "Gain a new elemental discipline option to spend Focus Points on.")],
+      11: [f("Additional Elemental Discipline (2)", "Gain another, higher-cost elemental discipline option.")],
+      17: [f("Additional Elemental Discipline (3)", "Gain your most powerful elemental discipline option yet.")],
+    },
+    "Kensei": {
+      3: [f("Path of the Kensei", "Choose kensei weapons, and gain a bonus to their attack or damage roll a few times per turn.")],
+      6: [f("One with the Blade", "Your kensei weapons deal extra damage on a critical hit, and you can deflect ranged attacks.")],
+      11: [f("Sharpen the Blade", "Spend Focus Points to magically enhance a kensei weapon temporarily.")],
+      17: [f("Unerring Accuracy", "Reroll a missed kensei weapon attack once per turn.")],
+    },
+    "Long Death": {
+      3: [f("Touch of Death", "When you reduce a creature to 0 hit points, gain a pool of temporary hit points.")],
+      6: [f("Hour of Reaping", "Use your action to frighten creatures around you.")],
+      11: [f("Mastery of Death", "Spend a Focus Point to avoid dropping to 0 hit points instead of dying outright.")],
+      17: [f("Touch of the Long Death", "Spend several Focus Points to deal significant Necrotic damage by touch, at some risk to yourself.")],
+    },
+    "Mercy": {
+      3: [f("Implements of Mercy & Hand of Healing/Harm", "Gain proficiency with disguise and healer's kits, and spend Focus Points to heal or harm with a touch.")],
+      6: [f("Physician's Touch", "Your Hand of Healing or Harm can also cure a condition or briefly impose paralysis.")],
+      11: [f("Flurry of Healing and Harm", "Heal or harm a creature as part of your Flurry of Blows, at no extra cost.")],
+      17: [f("Hand of Ultimate Mercy", "Once, restore a recently-dead creature to life.")],
+    },
+    "Open Hand": {
       3: [f("Open Hand Technique", "Your Flurry of Blows hits can knock a creature prone, push it away, or deny its reactions.")],
       6: [f("Wholeness of Body", "Use a bonus action to heal yourself a modest amount of hit points.")],
       11: [f("Tranquility", "You gain the effect of Sanctuary at the start of each day, until you use it.")],
       17: [f("Quivering Palm", "Set up a devastating vibration in a creature you've struck, which you can later trigger to nearly kill it.")],
     },
+    "Shadow": {
+      3: [f("Shadow Arts", "Spend Focus Points for minor illusion and darkness-themed spell effects, including Darkness and Pass Without Trace.")],
+      6: [f("Shadow Step", "Teleport between two dim or dark spaces as a bonus action, gaining advantage on your next attack.")],
+      11: [f("Cloak of Shadows", "Become invisible whenever you're in an area of dim light or darkness.")],
+      17: [f("Opportunist", "Attack a creature whenever an ally hits it within 5 feet of you, once per turn.")],
+    },
+    "Sun Soul": {
+      3: [f("Radiant Sun Bolt", "Hurl a bolt of Radiant energy as a spell attack, fueled by your ki.")],
+      6: [f("Searing Arc Strike", "Spend Focus Points to cast a small Burning Hands-like effect right after the Attack action.")],
+      11: [f("Searing Sunburst", "Create a burst of Radiant light that damages everyone caught in a sphere.")],
+      17: [f("Sun Shield", "Glow with light, damaging creatures that hit you in melee.")],
+    },
+    // Added 2026-09-21 from Arcana Unleashed - one of only 2 of that book's
+    // 8 "new" subclasses that are genuinely new rather than reworks of
+    // existing ones (see vault-map.md). UPDATE 2026-10-12: level 11's
+    // "Centered Focus" name/effect corroborated independently (its
+    // Concentration-advantage wording matches what's already below) -
+    // no longer flagged as uncertain.
+    "Warrior of the Mystic Arts": {
+      3: [
+        f("Spellcasting", "You learn two cantrips of your choice from the Sorcerer spell list, and you prepare a small number of Sorcerer spells that grows as you gain levels; Wisdom is your spellcasting ability for these spells."),
+        f("Mystic Fighting Style", "When you take the Attack action on your turn, you can replace one of your attacks with a casting of one of your Sorcerer cantrips that has a casting time of an action."),
+      ],
+      6: [f("Mystic Focus", "You can expend a spell slot to regain a number of expended Focus Points equal to the slot's level, and you can expend Focus Points to convert them back into a spell slot.")],
+      11: [f("Centered Focus", "You have advantage on any saving throw you make to maintain Concentration when you expend a Focus Point to use Flurry of Blows, Patient Defense, or Step of the Wind.")],
+      17: [f("Improved Mystic Fighting Style", "When you take the Attack action on your turn, you can replace two of your attacks with a casting of one of your level 1 or 2 Sorcerer spells that has a casting time of an action.")],
+    },
   },
   "Paladin": {
-    "Oath of Devotion": {
+    "Ancients": {
+      3: [f("Channel Divinity: Nature's Wrath & Turn the Faithless", "Restrain a nearby creature with spectral vines, or turn fey and fiends.")],
+      7: [f("Aura of Warding", "You and nearby allies gain resistance to damage from spells.")],
+      15: [f("Undying Sentinel", "Avoid dropping below 1 hit point once per Long Rest, and you age more slowly.")],
+      20: [f("Elder Champion", "Transform to regenerate hit points, cast spells as a bonus action, and hinder enemies' saving throws.")],
+    },
+    "Conquest": {
+      3: [f("Channel Divinity: Conquering Presence & Guided Strike", "Frighten a group of nearby enemies, or add +10 to an attack roll after seeing it miss.")],
+      7: [f("Aura of Conquest", "Frightened creatures near you have their speed reduced to 0 and take Psychic damage.")],
+      15: [f("Scornful Rebuke", "Creatures that hit you in melee take Psychic damage in return.")],
+      20: [f("Invincible Conqueror", "Become resistant to all damage and gain an extra attack each turn, for one minute.")],
+    },
+    "Crown": {
+      3: [f("Channel Divinity: Champion Challenge & Turn the Tide", "Force a creature to focus its attacks on you, or use your reaction to heal your group.")],
+      7: [f("Divine Allegiance", "Take damage that would hit a nearby ally instead.")],
+      15: [f("Unyielding Spirit", "You can't be paralyzed or stunned.")],
+      20: [f("Exalted Champion", "Gain resistance to nonmagical damage and grant advantage on saves to nearby allies, for ten minutes.")],
+    },
+    "Devotion": {
       3: [f("Channel Divinity: Sacred Weapon & Turn the Unholy", "Add your Charisma modifier to weapon attack rolls temporarily, or turn fiends and undead.")],
       7: [f("Aura of Devotion", "You and nearby allies can't be charmed.")],
       15: [f("Purity of Spirit", "You're constantly under the effect of Protection from Evil and Good.")],
       20: [f("Holy Nimbus", "Emanate sunlight that damages fiends and undead, and grants advantage on saves against their spells.")],
     },
+    "Glory": {
+      3: [f("Channel Divinity: Peerless Athlete & Inspiring Smite", "Gain advantage on Athletics or Acrobatics checks briefly, or grant nearby allies temporary hit points after a Divine Smite.")],
+      7: [f("Aura of Alacrity", "Your speed increases, and moving to an ally's side lets you share the bonus with them.")],
+      15: [f("Glorious Defense", "Use your reaction to add a bonus to your or a nearby ally's AC against an attack, and counterattack if it still misses.")],
+      20: [f("Living Legend", "Gain advantage on ability checks, extraordinary luck on a failed attack once per turn, and can captivate a crowd once per Long Rest.")],
+    },
+    "Oathbreaker": {
+      3: [f("Channel Divinity: Control Undead & Dreadful Aspect", "Dominate an undead creature, or frighten nearby foes.")],
+      7: [f("Aura of Despair", "Creatures near you have disadvantage on saving throws.")],
+      15: [f("Supernatural Resistance", "Resistance to nonmagical bludgeoning, piercing, and slashing damage.")],
+      20: [f("Dread Lord", "Surround yourself with dark power to fly, deal extra Necrotic damage, and frighten with your smites.")],
+    },
+    "Redemption": {
+      3: [f("Channel Divinity: Emissary of Peace & Rebuke the Violent", "Grant yourself a bonus to Persuasion checks briefly, or punish a creature that hits you.")],
+      7: [f("Aura of the Guardian", "Magically transfer damage from a nearby ally onto yourself.")],
+      15: [f("Protective Spirit", "Heal a little whenever you end your turn below half your hit points in combat.")],
+      20: [f("Emissary of Redemption", "Reflect some damage back at attackers you haven't harmed, as long as you take no hostile action.")],
+    },
+    "Vengeance": {
+      3: [f("Channel Divinity: Abjure Enemy & Vow of Enmity", "Frighten and hinder a creature's movement, or gain advantage on attacks against a chosen foe.")],
+      7: [f("Relentless Avenger", "Move part of your speed as part of your reaction attack.")],
+      15: [f("Soul of Vengeance", "Use your reaction to attack a creature under your Vow of Enmity when it attacks someone else.")],
+      20: [f("Avenging Angel", "Sprout wings to fly, and frighten enemies who see you.")],
+    },
+    "Watchers": {
+      3: [f("Channel Divinity: Watcher's Will & Abjure the Extraplanar", "Grant yourself and allies advantage on an Intelligence, Wisdom, or Charisma save, or hinder aberrations, celestials, elementals, fey, and fiends.")],
+      7: [f("Aura of the Sentinel", "You and nearby allies gain a bonus to initiative rolls.")],
+      15: [f("Vigilant Rebuke", "You and nearby allies can make a reaction attack against a creature that turns invisible or teleports nearby.")],
+      20: [f("Mortal Bulwark", "Briefly see the true form of extraplanar creatures, and gain a potent bonus against them.")],
+    },
+    // Added 2026-09-21 from Forgotten Realms: Heroes of Faerûn - see
+    // vault-map.md for sourcing caveats.
+    "Oath of the Noble Genies": {
+      3: [
+        f("Elemental Smite", "Your Channel Divinity gains a new option: when you use Divine Smite, you can also choose Dao's Crush, Djinni's Escape, Efreeti's Fury, or Marid's Surge for an additional elemental effect."),
+        f("Genie Spells", "You always have certain spells prepared once you reach the levels noted for each: Chromatic Orb and Elementalism (3rd), Thunderous Smite and Mirror Image (5th), Phantasmal Force and Fly (9th), Gaseous Form and Conjure Minor Elementals (13th), Summon Elemental and Banishing Smite (17th)."),
+        f("Genie's Splendor", "While you aren't wearing medium or heavy armor, your AC equals 10 plus your Dexterity and Charisma modifiers (a shield's bonus still applies), and you gain proficiency in Acrobatics, Intimidation, Performance, or Persuasion."),
+      ],
+      7: [f("Aura of Elemental Shielding", "At the start of each of your turns, you and allies within the aura gain resistance to one damage type of your choice: Acid, Cold, Fire, Lightning, or Thunder.")],
+      15: [f("Elemental Rebuke", "When you're hit by an attack, you can use your reaction to force the attacker to make a Dexterity saving throw or take elemental damage of a type you choose, and you reduce the triggering attack's damage to you.")],
+      20: [f("Noble Scion", "Once per Long Rest, you can fly for one hour, and once during that time you can turn a failed d20 Test (yours or one you can see within range) into a success.")],
+    },
   },
   "Ranger": {
+    "Beast Master": {
+      3: [f("Ranger's Companion", "Gain a loyal beast companion that fights and travels at your side.")],
+      7: [f("Exceptional Training", "Your companion can Dash, Disengage, or Help without using its action, and its attacks count as magical.")],
+      11: [f("Bestial Fury", "Your companion can make two attacks when you command it to attack.")],
+      17: [f("Share Spells", "Your touch-range spells can also affect your companion, if it's within 30 feet of you.")],
+    },
+    "Fey Wanderer": {
+      3: [f("Dreadful Strikes & Otherworldly Glamour", "Your weapon attacks deal extra Psychic damage once per turn, and you gain a bonus to Persuasion and Performance checks.")],
+      7: [f("Beguiling Twist", "Grant a nearby ally advantage against being charmed or frightened, or end such an effect on them.")],
+      11: [f("Fey Reinforcements", "Cast Summon Fey without a spell slot, once per Long Rest.")],
+      17: [f("Misty Wanderer", "Cast Misty Step for free, and can bring a willing creature along with you.")],
+    },
+    "Gloom Stalker": {
+      3: [f("Dread Ambusher & Umbral Sight", "Extra damage and speed on your first turn in combat, and see in darkness, including magical darkness.")],
+      7: [f("Iron Mind", "Gain proficiency in Wisdom or Intelligence saving throws.")],
+      11: [f("Stalker's Flurry", "Make an extra attack when you miss with an attack roll, once per turn.")],
+      17: [f("Shadowy Dodge", "Use your reaction to impose disadvantage on an attack roll against you.")],
+    },
+    "Horizon Walker": {
+      3: [f("Detect Portal & Planar Warrior", "Sense nearby planar portals, and imbue a hit with extra Force damage once per turn.")],
+      7: [f("Ethereal Step", "Cast Etherealness for a moment, once per Short or Long Rest.")],
+      11: [f("Distant Strike", "Teleport a short distance between your attacks when you take the Attack action.")],
+      17: [f("Spectral Defense", "Use your reaction to briefly gain resistance to all damage from a single attack.")],
+    },
     "Hunter": {
       3: [f("Hunter's Prey", "Choose Colossus Slayer, Giant Killer, or Horde Breaker for a combat edge against your foes.")],
       7: [f("Defensive Tactics", "Choose Escape the Horde, Multiattack Defense, or Steel Will for a defensive edge.")],
       11: [f("Multiattack", "Choose Volley (hit many nearby foes with a ranged attack) or Whirlwind Attack (the melee version).")],
       17: [f("Superior Hunter's Defense", "Choose Evasion, Stand Against the Tide, or Uncanny Dodge for an even stronger defense.")],
     },
+    "Monster Slayer": {
+      3: [f("Hunter's Sense & Slayer's Prey", "Learn a creature's damage resistances or immunities on sight, and mark a foe to deal extra damage to.")],
+      7: [f("Supernatural Defense", "Add a bonus to a saving throw against magic used by your marked prey.")],
+      11: [f("Magic-User's Nemesis", "Use your reaction to foil a nearby creature's spell, teleport, or extradimensional escape attempt.")],
+      17: [f("Slayer's Counter", "If your Slayer's Prey attack is interrupted by a forced saving throw, your damage happens anyway.")],
+    },
+    "Swarmkeeper": {
+      3: [f("Gathered Swarm & Swarmkeeper Magic", "A swarm of Tiny spirits follows you, letting you reposition foes and yourself, plus a couple of bonus spells.")],
+      7: [f("Writhing Tide", "Move through the space of a Large or smaller creature, or gain a short flying or climbing burst.")],
+      11: [f("Mighty Swarm", "Your swarm can knock foes prone, push them away, or pull them closer.")],
+      17: [f("Swarming Dispersal", "Vanish into your swarm to become briefly invisible whenever you take damage.")],
+    },
+    // Added 2026-09-21 from Forgotten Realms: Heroes of Faerûn - see
+    // vault-map.md for sourcing caveats. Secondary sources placed the
+    // capstone feature at "15th level," but this plugin's Ranger schema
+    // only swaps subclass features at 3/7/11/17 (matching every other
+    // Ranger subclass above), so it's placed at 17 here instead.
+    "Winter Walker": {
+      3: [
+        f("Frigid Explorer", "You have resistance to Cold damage, and once per turn when you hit a creature with an attack, you can deal an extra 1d4 Cold damage that ignores resistance."),
+        f("Hunter's Rime", "When you cast Hunter's Mark, you gain temporary hit points equal to 1d10 plus your Ranger level, and the marked creature can't willingly move away from you using its Disengage action."),
+        f("Winter Walker Spells", "You always have certain spells prepared once you reach the levels noted for each: Ice Knife (3rd), Pass without Trace (5th), Remove Curse (9th), Ice Storm (13th), Cone of Cold (17th)."),
+      ],
+      7: [f("Fortifying Soul", "Once per Long Rest as a Magic action, a number of creatures you choose within 30 feet (up to your Wisdom modifier, minimum one) each regain 1d10 plus your Ranger level hit points and gain advantage on saving throws against being frightened for 1 hour.")],
+      11: [f("Chilling Retribution", "When you're hit by an attack, you can use your reaction to force the attacker to make a Wisdom saving throw or have its speed reduced to 0 until the end of your next turn.")],
+      17: [f("Frozen Haunt", "While Hunter's Mark is active (usable once per Long Rest this way), you become a ghostly, cold-wreathed form: you're immune to being grappled, knocked prone, or restrained, you can move through creatures and objects as if they were difficult terrain, and an emanation around you deals Cold damage to hostile creatures nearby.")],
+    },
   },
   "Rogue": {
+    "Arcane Trickster": {
+      3: [f("Spellcasting & Mage Hand Legerdemain", "Learn a few wizard spells (mostly Illusion and Enchantment), and use an invisible Mage Hand to steal, plant, or pick locks.")],
+      9: [f("Magical Ambush", "A creature you cast a spell on, while hidden from it, has disadvantage on its saving throw.")],
+      13: [f("Versatile Trickster", "Briefly distract a creature via your Mage Hand to gain advantage against it.")],
+      18: [f("Spell Thief", "Steal a spell right out of a creature's mind as it casts it, and cast it yourself later.")],
+    },
+    "Assassin": {
+      3: [f("Bonus Proficiencies & Assassinate", "Gain proficiency with disguise and poisoner's kits, and score automatic critical hits against surprised creatures.")],
+      9: [f("Infiltration Expertise", "Spend downtime to craft a false identity.")],
+      13: [f("Impostor", "Perfectly mimic another person's speech, writing, and behavior after studying them closely.")],
+      18: [f("Death Strike", "A surprised creature you hit must save or take double damage.")],
+    },
+    "Inquisitive": {
+      3: [f("Ear for Deceit & Eye for Detail", "Get better at sensing lies, and spend a bonus action to spot hidden creatures or details.")],
+      9: [f("Insightful Fighting", "Use Insight to size up a foe and deal Sneak Attack against it even without advantage.")],
+      13: [f("Steady Eye", "Gain advantage on a Perception or Investigation check if you don't move that turn.")],
+      18: [f("Eye for Weakness", "Your Insightful Fighting adds extra Sneak Attack damage.")],
+    },
+    "Mastermind": {
+      3: [f("Master of Intrigue & Master of Tactics", "Mimic dialects and gain extra tool proficiencies, and grant an ally a Help-like bonus at range.")],
+      9: [f("Insightful Manipulator", "Briefly learn how a creature's Strength, Dexterity, Constitution, deception, and insight compare to yours.")],
+      13: [f("Misdirection", "Redirect an attack that hits you onto a nearby creature instead, tricking the attacker.")],
+      18: [f("Soul of Deceit", "Your thoughts can't be read, and you can plant false surface thoughts if probed.")],
+    },
+    "Phantom": {
+      3: [f("Whispers of the Dead & Wails from the Grave", "Briefly gain a skill or tool proficiency from a spirit's memory, and Sneak Attack damage can also hit a second nearby target.")],
+      9: [f("Tokens of the Departed", "Create a soul trinket from a dying creature, usable later for a magical benefit.")],
+      13: [f("Ghost Walk", "Briefly become incorporeal, immune to nonmagical damage and able to move through objects.")],
+      18: [f("Death's Friend", "Your Wails from the Grave counts as extra Sneak Attack damage, and your soul trinkets grow more powerful.")],
+    },
+    // Added 2026-09-21 from Forgotten Realms: Heroes of Faerûn - see
+    // vault-map.md for sourcing caveats. UPDATE 2026-10-12: re-researched
+    // against 2 independent secondary sources (wargamer.com, dungeonmister.com)
+    // now that dnd2024.wikidot.com-style detail is reachable; Bloodthirst,
+    // Aura of Malevolence, Strike Fear, and Dread Incarnate all corrected
+    // below (the original guesses for these four were wrong, not just
+    // unverified - official capstone is printed at 17th level but kept at
+    // this plugin's fixed 18-slot, matching every other Rogue subclass).
+    // Still a secondary-source paraphrase, not verbatim book text.
+    "Scion of the Three": {
+      3: [
+        f("Bloodthirst", "Once a creature you can see within 30 feet becomes Bloodied, you can use your reaction to teleport next to it and make a melee attack (weapon or spell) against it. You can use this a number of times equal to your Intelligence modifier (minimum once), regaining all expended uses when you finish a Long Rest."),
+        f("Dread Allegiance", "At the end of a Long Rest, you can dedicate yourself to Bane, Bhaal, or Myrkul, gaining a damage resistance and a cantrip tied to your choice until your next Long Rest."),
+      ],
+      9: [f("Strike Fear", "You gain a new Cunning Strike option: by forgoing one Sneak Attack die of extra damage, you can frighten the creature you hit until the start of your next turn, and you have advantage on attack rolls against a creature frightened this way.")],
+      13: [f("Aura of Malevolence", "When you teleport using Bloodthirst, creatures you choose within 10 feet of your starting or landing space take Necrotic damage equal to your Intelligence modifier, ignoring resistance to it.")],
+      18: [f("Dread Incarnate", "You regain one expended use of Bloodthirst when you finish a Short Rest, and whenever you roll a 1 or 2 on a Sneak Attack damage die, you treat the roll as a 3.")],
+    },
+    "Scout": {
+      3: [f("Skirmisher & Survivalist", "Move away from an enemy that ends its turn near you, and gain proficiency (or expertise) in Nature and Survival.")],
+      9: [f("Superior Mobility", "Your walking, climbing, and swimming speed all increase.")],
+      13: [f("Ambush Master", "You and allies gain advantage on initiative, and a creature you hit first in combat is easier for allies to hit.")],
+      18: [f("Sudden Strike", "Attack twice when you use your bonus action Cunning Action, but only apply Sneak Attack once per turn.")],
+    },
+    "Soulknife": {
+      3: [f("Psionic Power & Psychic Blades", "Gain Psionic Energy dice, and manifest a pair of throwable psychic blades as your weapon.")],
+      9: [f("Soul Blades", "Read a creature's surface thoughts, or make your blade strike twice in an unnerving flash.")],
+      13: [f("Psychic Teleportation", "Spend a Psionic die to teleport a short distance as a bonus action.")],
+      18: [f("Rend Mind", "A creature hit by your Psychic Blades can be stunned if it fails a saving throw.")],
+    },
+    "Swashbuckler": {
+      3: [f("Fancy Footwork & Rakish Audacity", "Moving away from a creature you attack doesn't provoke it, and you add Charisma to initiative plus can Sneak Attack while alone with a foe.")],
+      9: [f("Panache", "A successful Persuasion check can turn a hostile creature briefly friendly or distracted.")],
+      13: [f("Elegant Maneuver", "Gain advantage on an Acrobatics or Athletics check as a bonus action.")],
+      18: [f("Master Duelist", "Turn a failed attack roll into a success, once per Short or Long Rest.")],
+    },
     "Thief": {
       3: [f("Fast Hands & Second-Story Work", "Use Cunning Action to also use an object or pick a lock or pocket, and climbing costs no extra movement while you jump farther.")],
       9: [f("Supreme Sneak", "Gain advantage on Stealth checks if you move at half speed.")],
@@ -1750,33 +3362,202 @@ const SUBCLASS_LEVEL_FEATURES = {
     },
   },
   "Sorcerer": {
-    "Draconic Sorcery": {
-      3: [
-        f("Draconic Resilience", "Your Hit Point maximum increases by 3, and increases by 1 again whenever you gain another Sorcerer level. While you aren't wearing armor, your base Armor Class equals 10 plus your Dexterity and Charisma modifiers."),
-        f("Draconic Spells", "You always have certain spells prepared once you reach the Sorcerer level shown in the Draconic Spells table: 3rd - Alter Self, Chromatic Orb, Command, Dragon's Breath; 5th - Fear, Fly; 7th - Arcane Eye, Charm Monster; 9th - Legend Lore, Summon Dragon."),
-      ],
-      6: [f("Elemental Affinity", "Choose Acid, Cold, Fire, Lightning, or Poison. You have resistance to that damage type, and when you cast a spell that deals damage of that type, you can add your Charisma modifier to one damage roll of that spell.")],
-      14: [f("Dragon Wings", "As a Bonus Action, cause draconic wings to appear on your back for 1 hour (or until dismissed), giving you a Fly Speed of 60 feet. Once you use this feature, you can't use it again until you finish a Long Rest unless you spend 3 Sorcery Points to restore your use of it.")],
-      18: [f("Dragon Companion", "You can cast Summon Dragon without a Material component, and once per Long Rest without expending a spell slot; when you cast it this way you can also forgo Concentration, reducing the spell's duration to 1 minute.")],
+    "Aberrant Mind": {
+      6: [f("Warping Implosion", "Teleport a short distance and violently pull nearby creatures toward the space you left.")],
+      14: [f("Revelation in Flesh", "Briefly reshape your body for a swim or fly speed, extra reach, or to become amorphous.")],
+    },
+    "Clockwork Soul": {
+      6: [f("Bastion of Law", "Shield a creature with a temporary ward that absorbs damage, usable a few times per Long Rest.")],
+      14: [f("Trance of Order", "Before a creature's attack roll or save-inducing effect resolves against you, slightly adjust the roll.")],
+    },
+    "Divine Soul": {
+      6: [f("Empowered Healing", "Spend Sorcery Points to reroll healing dice from your or another creature's spell.")],
+      14: [f("Angelic Form", "Sprout spectral wings to fly, and shed bright light around yourself.")],
+    },
+    "Draconic Bloodline": {
+      6: [f("Elemental Affinity", "Add your Charisma modifier to the damage of a spell matching your draconic damage type, and can gain resistance to it.")],
+      14: [f("Dragon Wings", "Sprout dragon wings to gain a flying speed.")],
+    },
+    "Shadow Magic": {
+      6: [f("Eyes of the Dark", "See in magical darkness, and cast Darkness by spending Sorcery Points instead of a spell slot.")],
+      14: [f("Umbral Form", "Become a shadow, gaining resistance to nonmagical damage and the ability to move through small gaps.")],
+    },
+    // Added 2026-09-21 from Arcana Unleashed - see vault-map.md for
+    // sourcing caveats. This plugin's Sorcerer schema only swaps subclass
+    // features at 6/14 for every subclass above (a pre-existing scope
+    // limit, not something new introduced here), so Spellfire Sorcery's
+    // real 3rd-level "Spellfire Burst/Spells" and 18th-level "Crown of
+    // Spellfire" features aren't represented - only its 6th/14th are.
+    "Spellfire Sorcery": {
+      6: [f("Absorb Spells", "You always have Counterspell prepared, and you can cast it without expending a spell slot. When a spell fails against this Counterspell, you regain a number of Sorcery Points equal to the level of the failed spell (minimum 1).")],
+      14: [f("Honed Spellfire", "Once per turn when you spend a Sorcery Point, you can also grant a creature within 30 feet of yourself 1d8 temporary hit points, or deal 1d8 Fire or Radiant damage to a hostile creature within 30 feet of yourself.")],
+    },
+    "Storm Sorcery": {
+      6: [f("Heart of the Storm & Storm Guide", "Gain resistance to lightning and thunder damage when casting a spell of 1st level or higher, plus minor weather control.")],
+      14: [f("Wind Soul", "Gain a flying speed, and can grant flight and lightning resistance to others briefly.")],
+    },
+    "Wild Magic": {
+      6: [f("Bend Luck", "Spend Sorcery Points to adjust an attack roll, ability check, or saving throw made by another creature.")],
+      14: [f("Controlled Chaos", "Roll twice on the Wild Magic Surge table and choose either result.")],
     },
   },
   "Warlock": {
-    "Fiend Patron": {
+    "Archfey": {
+      3: [f("Fey Presence", "Force nearby creatures to be frightened or charmed for a moment, once per rest.")],
+      6: [f("Misty Escape", "Turn invisible and teleport a short distance away when you take damage.")],
+      10: [f("Beguiling Defenses", "You're immune to being charmed, and can turn a charm effect back on its source.")],
+      14: [f("Dark Delirium", "Briefly incapacitate and isolate a creature in an illusory realm.")],
+    },
+    "Celestial": {
+      3: [f("Bonus Cantrips & Healing Light", "Learn Sacred Flame and Light, and heal creatures using a pool of d6s that refreshes on a rest.")],
+      6: [f("Radiant Soul", "Resistance to Radiant damage, and add your Charisma modifier to Radiant spell damage.")],
+      10: [f("Celestial Resilience", "You and nearby allies gain temporary hit points after a Short Rest.")],
+      14: [f("Searing Vengeance", "If you'd die, instead stand back up in a burst of radiant fire.")],
+    },
+    "Fathomless": {
+      3: [f("Tentacle of the Deep & Gift of the Sea", "Summon a temporary spectral tentacle to attack with, and gain a swim speed with limited underwater breathing.")],
+      6: [f("Guardian Coil", "Your tentacle can protect a creature by intercepting an attack meant for it.")],
+      10: [f("Grasping Tentacles", "Cast Evard's Black Tentacles using a warlock spell slot, without needing it prepared.")],
+      14: [f("Fathomless Plunge", "Teleport yourself and nearby allies into deep water briefly.")],
+    },
+    "Fiend": {
       3: [f("Dark One's Blessing", "Gain temporary hit points whenever you reduce a hostile creature to 0 hit points.")],
       6: [f("Dark One's Own Luck", "Add a bonus to an ability check or saving throw, once per Short or Long Rest.")],
       10: [f("Fiendish Resilience", "Choose a damage type to resist until your next rest.")],
       14: [f("Hurl Through Hell", "Banish a struck creature briefly to a hellish plane, dealing Psychic damage.")],
     },
+    "Genie": {
+      3: [f("Genie's Vessel & Bottled Respite", "Bond with a magical vessel you can summon, and retreat inside it briefly to rest safely.")],
+      6: [f("Elemental Gift", "Gain resistance to your genie kind's damage type, and later a flying speed.")],
+      10: [f("Sanctuary Vessel", "Bring allies into your vessel with you to rest.")],
+      14: [f("Limited Wish", "Once, duplicate a powerful spell effect using your vessel's magic.")],
+    },
+    "Great Old One": {
+      3: [f("Awakened Mind", "Telepathically communicate with creatures you can see nearby.")],
+      6: [f("Entropic Ward", "Impose disadvantage on an attack against you, gaining advantage on your next attack if it still hits.")],
+      10: [f("Thought Shield", "Resistance to Psychic damage, and attackers who read your thoughts take damage back.")],
+      14: [f("Create Thrall", "Permanently charm an incapacitated humanoid, letting you communicate telepathically with it.")],
+    },
+    "Hexblade": {
+      3: [f("Hexblade's Curse & Hex Warrior", "Curse a creature for extra damage and easier critical hits against it, and use Charisma for weapon attacks.")],
+      6: [f("Accursed Specter", "Animate a slain humanoid's spirit into a temporary spectral minion.")],
+      10: [f("Armor of Hexes", "An attack against you by your cursed target may simply miss outright.")],
+      14: [f("Master of Hexes", "When your cursed target dies, move the curse to a new nearby creature for free.")],
+    },
+    "Undead": {
+      3: [f("Form of Dread", "Transform to gain resistance to damage and frighten nearby creatures.")],
+      6: [f("Grave Touched", "You don't need to breathe or eat, and are harder to detect as undead or frightened.")],
+      10: [f("Mortal Husk", "Your Form of Dread also lets you ignore a killing blow briefly.")],
+      14: [f("Astral Arms", "Manifest ghostly arms to grapple, shove, or attack at range.")],
+    },
+    "Undying": {
+      3: [f("Among the Dead", "Undead have a harder time targeting you, and you learn the Spare the Dying cantrip.")],
+      6: [f("Defy Death", "Regain hit points when you succeed a death saving throw, and advantage on Constitution checks against disease and poison.")],
+      10: [f("Undying Nature", "You don't need to eat, drink, breathe, or sleep, and age extremely slowly.")],
+      14: [f("Indestructible Life", "Regain a decent number of hit points as a bonus action, or patch up a lost limb.")],
+    },
+    // Added 2026-09-21 from Arcana Unleashed - see vault-map.md for
+    // sourcing caveats. UPDATE 2026-10-12: re-researched against
+    // dungeonmister.com's optimisation guide (citing the book's final,
+    // post-playtest wording) - the original level 6/10 names and effects
+    // below were swapped/guessed wrong, now corrected: level 6 is
+    // "Vestige Power" (not "Vestige Recovery") and level 10 is "Vestige
+    // Recovery" (not "Aura of Power"). Still a secondary-source paraphrase,
+    // not verbatim book text.
+    "Vestige Patron": {
+      3: [
+        f("Vestige Companion", "Your patron manifests a spectral companion (Celestial, Fiend, or Undead in nature, your choice) that fights alongside you, using your Charisma modifier and Proficiency Bonus for its attacks, and that you can command to use its own limited Divine Power once per Long Rest."),
+        f("Vestige Spells", "You always have certain extra spells prepared, drawn from one Cleric domain of your choice (Life, Light, Trickery, or War), scaling as you gain Warlock levels."),
+      ],
+      6: [f("Vestige Power", "You can command your companion to use its bonus-action power more often, and while it's within 30 feet of you, you share its damage resistance.")],
+      10: [f("Vestige Recovery", "Once per Long Rest, if your companion would be reduced to 0 hit points, it instead fully recovers, helping it last through an encounter instead of being destroyed.")],
+      14: [f("Semblance of Life", "Once per Long Rest with no action required, your Vestige Companion transforms into a more powerful spirit for about an hour, granting you a burst of temporary hit points and letting it cast a spell you have prepared through it.")],
+    },
   },
   "Wizard": {
-    "Evoker": {
-      3: [
-        f("Evocation Savant", "Choose two Wizard spells from the Evocation school, each no higher than level 2, and add them to your spellbook for free. Whenever you gain access to a new level of spell slots, you can add one Evocation spell of an eligible level to your spellbook for free."),
-        f("Potent Cantrip", "When you cast a damaging cantrip at a creature and miss with the attack roll, or the target succeeds on its saving throw against the cantrip, the target still takes half the cantrip's damage (if any) but suffers no additional effect from it."),
-      ],
-      6: [f("Sculpt Spells", "When you cast an Evocation spell that affects other creatures you can see, you can choose a number of them equal to 1 plus the spell's level; those creatures automatically succeed on their saving throws against the spell and take no damage if they'd normally take half on a success.")],
-      10: [f("Empowered Evocation", "Whenever you cast a Wizard spell from the Evocation school, you can add your Intelligence modifier to one damage roll of that spell.")],
-      14: [f("Overchannel", "When you cast a Wizard spell of levels 1-5 that deals damage, you can deal maximum damage with it. The first time you do so you suffer no adverse effect; each time you use this feature again before finishing a Long Rest, you take 2d12 Necrotic damage (ignoring resistance and immunity) for each level of the spell slot, and that damage increases by 1d12 with each further use before a Long Rest.")],
+    "Bladesinging": {
+      2: [f("Training in War and Song & Bladesong", "Gain a weapon and light armor proficiency, and a bonus-action stance that boosts your AC, speed, and concentration while unarmored.")],
+      6: [f("Extra Attack", "You can attack twice, instead of once, whenever you take the Attack action on your turn.")],
+      10: [f("Song of Defense", "Spend a spell slot to reduce damage you take, while your Bladesong is active.")],
+      14: [f("Song of Victory", "Add your Intelligence modifier to your melee damage while your Bladesong is active.")],
+    },
+    "Chronurgy": {
+      2: [f("Chronal Shift & Temporal Awareness", "Force a creature to reroll a d20, and add your Intelligence modifier to your initiative.")],
+      6: [f("Momentary Stasis", "Briefly freeze a creature in time so it can't take actions or move.")],
+      10: [f("Arcane Abeyance", "Store a spell inside an object, to be triggered later.")],
+      14: [f("Convergent Future", "Choose the result of a roll instead of leaving it to chance, a limited number of times.")],
+    },
+    "Graviturgy": {
+      2: [f("Adjust Density & Gravity Sense", "Change a creature or object's weight, and sense strong gravitational fields nearby.")],
+      6: [f("Gravity Well", "Pull a creature affected by your spell toward the point it was targeted from.")],
+      10: [f("Violent Attraction", "A creature damaged by your spell can be yanked toward or away from a point you choose.")],
+      14: [f("Event Horizon", "Create a zone of intense gravity that pulls creatures in and reduces their speed.")],
+    },
+    "Lore Mastery": {
+      2: [f("Arcane Insight", "Gain an extra tool or skill proficiency tied to lore, and identify magic effects more easily.")],
+      6: [f("Master of Lore", "Briefly gain expertise on a check tied to a spell you know.")],
+      10: [f("Spell Secrets", "Learn a spell from a school other than your specialty at no extra cost.")],
+      14: [f("Reveal the Weakness", "Use your reaction to grant an ally an edge in a fight after identifying a foe's traits.")],
+    },
+    "Order of Scribes": {
+      2: [f("Wizardly Quill & Awakened Spellbook", "A magic quill that copies spells quickly and cleanly, and a spellbook that can change the damage type of a spell you cast from it.")],
+      6: [f("Manifest Mind", "Project a floating, invisible spectral mind to cast spells through at a distance.")],
+      10: [f("Master Scrivener", "Temporarily copy a spell from your spellbook into a scroll for another creature to use.")],
+      14: [f("One with the Word", "Reduce damage you take by expending a prepared spell instead.")],
+    },
+    "School of Abjuration": {
+      2: [f("Abjuration Savant & Arcane Ward", "Copy abjuration spells into your book cheaply, and gain a magical shield of hit points that recharges when you cast abjuration spells.")],
+      6: [f("Projected Ward", "Your Arcane Ward can protect a nearby creature instead of just yourself.")],
+      10: [f("Improved Abjuration", "Add your proficiency bonus a second time to certain abjuration spell checks.")],
+      14: [f("Spell Resistance", "Advantage on saving throws against spells, and resistance to damage from spells.")],
+    },
+    "School of Conjuration": {
+      2: [f("Conjuration Savant & Minor Conjuration", "Copy conjuration spells into your book cheaply, and conjure a small harmless object out of thin air.")],
+      6: [f("Benign Transposition", "Teleport a short distance, or swap places with a willing creature you conjured.")],
+      10: [f("Focused Conjuration", "Your conjured creatures and objects hold together a little better under strain.")],
+      14: [f("Durable Summons", "Creatures you summon arrive with extra temporary hit points.")],
+    },
+    "School of Divination": {
+      2: [f("Divination Savant & Portent", "Copy divination spells into your book cheaply, and roll two d20s each day to replace any roll made by you or a creature you can see.")],
+      6: [f("Expert Divination", "Casting a divination spell of 2nd level or higher refunds you a lower-level spell slot.")],
+      10: [f("The Third Eye", "Gain darkvision, read any language, see invisible creatures, or see in the dark, at will.")],
+      14: [f("Greater Portent", "Roll three Portent dice each day instead of two.")],
+    },
+    "School of Enchantment": {
+      2: [f("Enchantment Savant & Hypnotic Gaze", "Copy enchantment spells into your book cheaply, and briefly incapacitate a creature by locking eyes with it.")],
+      6: [f("Instinctive Charm", "Redirect an attack against you onto the nearest other creature instead.")],
+      10: [f("Split Enchantment", "Your single-target enchantment spells can affect one additional target.")],
+      14: [f("Alter Memories", "A creature you charm can be made to forget time spent with you, or you gain advantage influencing it.")],
+    },
+    "School of Evocation": {
+      2: [f("Evocation Savant & Sculpt Spells", "Copy evocation spells into your book cheaply, and protect allies from your own damaging spell areas.")],
+      6: [f("Potent Cantrip", "Creatures that succeed on a save against your cantrips still take half damage.")],
+      10: [f("Empowered Evocation", "Add your Intelligence modifier to the damage of one evocation spell you cast.")],
+      14: [f("Overchannel", "Deal maximum damage with a lower-level spell, at the risk of hurting yourself if repeated.")],
+    },
+    "School of Illusion": {
+      2: [f("Illusion Savant & Improved Minor Illusion", "Copy illusion spells into your book cheaply, and your Minor Illusion cantrip can create sound and image together.")],
+      6: [f("Malleable Illusions", "Change the nature of an illusion spell you've already cast.")],
+      10: [f("Illusory Self", "Turn what would be a hit into a miss by revealing a decoy image of yourself.")],
+      14: [f("Illusory Reality", "Make one inanimate, illusory object from your illusion spell briefly real.")],
+    },
+    "School of Necromancy": {
+      2: [f("Necromancy Savant & Grim Harvest", "Copy necromancy spells into your book cheaply, and regain hit points when you kill a creature with a spell.")],
+      6: [f("Undead Thralls", "Undead you animate with Animate Dead are tougher and hit harder than usual.")],
+      10: [f("Inured to Undeath", "Resistance to Necrotic damage, and your hit point maximum can't be reduced.")],
+      14: [f("Command Undead", "Take control of an undead creature instead of merely turning it.")],
+    },
+    "School of Transmutation": {
+      2: [f("Transmutation Savant & Minor Alchemy", "Copy transmutation spells into your book cheaply, and temporarily change one material into another.")],
+      6: [f("Transmuter's Stone", "Create a magic stone granting darkvision, speed, resistance, or better saves to whoever holds it.")],
+      10: [f("Shapechanger", "Cast Polymorph on yourself without a spell slot, once per Short or Long Rest.")],
+      14: [f("Master Transmuter", "Destroy your Transmuter's Stone for a powerful one-time effect, such as removing a curse or restoring youth.")],
+    },
+    "War Magic": {
+      2: [f("Arcane Deflection & Tactical Wit", "Use your reaction to impose a penalty on an attack or boost your own saving throw, and add your Intelligence modifier to initiative.")],
+      6: [f("Power Surge", "Store extra spell energy after casting a spell, to unleash later as bonus damage.")],
+      10: [f("Durable Magic", "Gain a bonus to AC and saving throws while concentrating on a spell.")],
+      14: [f("Deflecting Shroud", "When you deflect an attack, nearby enemies also take Force damage.")],
     },
   },
 };
@@ -1799,7 +3580,7 @@ function getAsiLevels(className) {
 // (5e's fixed "take the average" rule: half the die rounded up, plus 1,
 // i.e. floor(die/2)+1 - e.g. a d10 fighter averages 6 HP/level before CON).
 const HIT_DICE = {
-  Barbarian: 12, Bard: 8, Cleric: 8, Druid: 8, Fighter: 10,
+  Artificer: 8, Barbarian: 12, Bard: 8, Cleric: 8, Druid: 8, Fighter: 10,
   Monk: 8, Paladin: 10, Ranger: 10, Rogue: 8, Sorcerer: 6, Warlock: 8, Wizard: 6,
 };
 // Per-class Primary Ability (display text only, not used in any
@@ -1812,6 +3593,7 @@ const HIT_DICE = {
 // Throws list on the Abilities page. Same "best-effort built-in table"
 // convention as HIT_DICE/BACKGROUND_DATA_2024 above.
 const CLASS_PRIMARY_ABILITY = {
+  Artificer: "Intelligence",
   Barbarian: "Strength",
   Bard: "Charisma",
   Cleric: "Wisdom",
@@ -1826,6 +3608,7 @@ const CLASS_PRIMARY_ABILITY = {
   Wizard: "Intelligence",
 };
 const CLASS_SAVING_THROWS = {
+  Artificer: ["CON", "INT"],
   Barbarian: ["STR", "CON"],
   Bard: ["DEX", "CHA"],
   Cleric: ["WIS", "CHA"],
@@ -1856,6 +3639,7 @@ const CLASS_SAVING_THROWS = {
 // Order) - those are layered on separately via CHOICE_PROFICIENCY_GRANTS
 // below, not baked in here.
 const CLASS_ARMOR_PROFICIENCIES = {
+  Artificer: ["Light Armor", "Medium Armor", "Shields"],
   Barbarian: ["Light Armor", "Medium Armor", "Shields"],
   Bard: ["Light Armor"],
   Cleric: ["Light Armor", "Medium Armor", "Shields"],
@@ -1870,6 +3654,7 @@ const CLASS_ARMOR_PROFICIENCIES = {
   Wizard: [],
 };
 const CLASS_WEAPON_PROFICIENCIES = {
+  Artificer: ["Simple Weapons"],
   Barbarian: ["Simple Weapons", "Martial Weapons"],
   Bard: ["Simple Weapons", "Hand Crossbows", "Longswords", "Rapiers", "Shortswords"],
   Cleric: ["Simple Weapons"],
@@ -1884,6 +3669,7 @@ const CLASS_WEAPON_PROFICIENCIES = {
   Wizard: ["Daggers", "Darts", "Slings", "Quarterstaffs", "Light Crossbows"],
 };
 const CLASS_TOOL_PROFICIENCIES = {
+  Artificer: ["Thieves' Tools", "Tinker's Tools", "One kind of Artisan's Tools (your choice)"],
   Bard: ["Three Musical Instruments (your choice)"],
   Druid: ["Herbalism Kit"],
   Monk: ["One Artisan's Tool or Musical Instrument (your choice)"],
@@ -1891,13 +3677,22 @@ const CLASS_TOOL_PROFICIENCIES = {
   // Barbarian, Cleric, Fighter, Paladin, Ranger, Sorcerer, Warlock, Wizard
   // grant no tool proficiency at 1st level - simply absent here.
 };
-// Armor/weapon proficiencies granted by a handful of races' own traits.
-// None of the 9 SRD 5.2.1 species (Dragonborn, Dwarf, Elf, Gnome, Goliath,
-// Halfling, Human, Orc, Tiefling) grant an extra armor/weapon proficiency
-// from their species traits alone, so this table is empty in the SRD-only
-// fork (kept, rather than removed, since computeAutomaticProficiencies
-// below still reads RACE_PROFICIENCIES[raceName] unconditionally).
-const RACE_PROFICIENCIES = {};
+// Armor/weapon proficiencies granted by a handful of races' own traits -
+// most races grant none at all (see the RACE_TRAITS text for each), so
+// this only needs entries for the ones that actually say "you have
+// proficiency with...". Read directly off this file's own RACE_TRAITS
+// descriptions above, not re-derived from general 5e knowledge, so it
+// stays consistent with whatever text this vault already shows the player.
+// Hill/Mountain Dwarf's own "Tool Proficiency" trait is a player CHOICE
+// (smith's/brewer's/mason's), handled separately below via the "tool
+// proficiency" FEATURE_CHOICE_DEFS entry, not listed here as a fixed grant.
+const RACE_PROFICIENCIES = {
+  "Astral Elf": { weapons: ["Longsword", "Shortsword", "Shortbow", "Longbow"] },
+  "Hill Dwarf": { weapons: ["Battleaxe", "Handaxe", "Light Hammer", "Warhammer"] },
+  "Mountain Dwarf": { armor: ["Light Armor", "Medium Armor"], weapons: ["Battleaxe", "Handaxe", "Light Hammer", "Warhammer"] },
+  Giff: { weapons: ["Firearms (or two Martial Weapons of your choice)"] },
+  Githyanki: { armor: ["Light Armor", "Medium Armor"], weapons: ["Shortsword", "Longsword"] },
+};
 // A few classes grant an EXTRA armor/weapon proficiency only via a
 // 1st-level pick rather than unconditionally - keyed by the granting
 // feature's name (lowercased, matching FEATURE_CHOICE_DEFS) and the chosen
@@ -1919,14 +3714,22 @@ const CHOICE_PROFICIENCY_GRANTS = {
 // (59 races are defined in RACE_TRAITS above) - same "best-effort draft"
 // caveat as this file's other hand-compiled tables.
 const RACE_LANGUAGES = {
-  Dwarf: ["Dwarvish"],
-  Elf: ["Elvish"],
-  Gnome: ["Gnomish"],
+  Dwarf: ["Dwarvish"], "Hill Dwarf": ["Dwarvish"], "Mountain Dwarf": ["Dwarvish"], Duergar: ["Dwarvish", "Undercommon"],
+  Elf: ["Elvish"], Eladrin: ["Elvish"], "Astral Elf": ["Elvish"], "Sea Elf": ["Elvish", "Aquan"],
+  Gnome: ["Gnomish"], "Deep Gnome": ["Gnomish", "Undercommon"],
   Halfling: ["Halfling"],
-  Orc: ["Orc"],
-  Dragonborn: ["Draconic"],
+  Orc: ["Orc"], "Half-Orc": ["Orc"],
+  Goblin: ["Goblin"], Hobgoblin: ["Goblin"], Bugbear: ["Goblin"],
+  Dragonborn: ["Draconic"], Kobold: ["Draconic"], Lizardfolk: ["Draconic"],
+  Githyanki: ["Gith"], Githzerai: ["Gith"],
+  Firbolg: ["Giant", "Elvish"],
   Goliath: ["Giant"],
+  Triton: ["Primordial"],
+  Genasi: ["Primordial"],
+  "Yuan-Ti Pureblood": ["Abyssal", "Draconic"],
+  Locathah: ["Aquan"],
   Tiefling: ["Infernal"],
+  Aasimar: ["Celestial"],
 };
 // ---- Feat-granted proficiencies (best-effort, generic text scan) ----
 // Feats are the most open-ended source of new proficiencies - a real Feat
@@ -2019,7 +3822,7 @@ function extractFeatProficiencyGrants(description) {
 // Groups a category's entries by (lowercased) name so the same proficiency
 // granted by two different sources (e.g. Dwarvish from both a race AND a
 // feat) shows up once with both sources listed, not twice - matching the
-// screenshot's own "Dwarvish (Dwarf, Clan Crafter, ...)" style.
+// screenshot's own "Dwarvish (Mountain Dwarf, Clan Crafter, ...)" style.
 function addProficiencyEntry(map, name, source) {
   const trimmed = String(name || "").trim();
   if (!trimmed) return;
@@ -2052,11 +3855,24 @@ function computeAutomaticProficiencies(fm, abFm, featuresList) {
     (raceProf.tools || []).forEach((t) => addProficiencyEntry(tools, t, raceName));
   }
 
-  const bgData = BACKGROUND_DATA_2024[fm.background];
+  const bgData = getBackgroundData(fm.background);
   if (bgData && bgData.tool) addProficiencyEntry(tools, bgData.tool, fm.background);
 
+  // Ground-truth proficiencies straight from an imported D&D Beyond
+  // character's own modifier list (see importFromDndBeyond) - purely
+  // additive on top of everything derived above from class/race/
+  // background/feats, never a replacement for it. Absent on every
+  // hand-built (or pre-existing) sheet, so this changes nothing for them.
+  const imported = fm.imported_proficiencies;
+  if (imported) {
+    (imported.armor || []).forEach((a) => addProficiencyEntry(armor, a, "D&D Beyond import"));
+    (imported.weapons || []).forEach((w) => addProficiencyEntry(weapons, w, "D&D Beyond import"));
+    (imported.tools || []).forEach((t) => addProficiencyEntry(tools, t, "D&D Beyond import"));
+  }
+
   // Choice-resolved extras: Divine Order/Primal Order (CHOICE_PROFICIENCY_
-  // GRANTS above), and Gnomish
+  // GRANTS above), Hill/Mountain Dwarf's own "Tool Proficiency" trait
+  // (chosen value IS the tool name, no lookup table needed), and Gnomish
   // Lineage's Rock Gnome pick (Tinker's Tools, per its own describe text
   // in RACE_TRAIT_CHOICES). Each reads whatever " Chosen: X." suffix the
   // existing choice-trait mechanism already stored on that feature. Plus,
@@ -2114,6 +3930,7 @@ function computeAutomaticProficiencies(fm, abFm, featuresList) {
 // collectFeaturesUpToLevel. Same "written fresh in our own words, not
 // quoted from any sourcebook" convention as RACE_DESCRIPTIONS above.
 const CLASS_DESCRIPTIONS = {
+  Artificer: "Inventive spellcasters who weave magic into gadgets and gear, turning mundane tools into infused items and magical constructs.",
   Barbarian: "Furious warriors who channel raw, primal rage into devastating strength and near-unstoppable endurance in battle.",
   Bard: "Charismatic performers who weave music and magic together, inspiring allies and unraveling foes with equal skill.",
   Cleric: "Devoted champions of a deity or divine ideal, wielding prayer and holy magic to heal, protect, and smite in their god's name.",
@@ -2128,7 +3945,20 @@ const CLASS_DESCRIPTIONS = {
   Wizard: "Scholarly spellcasters who master magic through rigorous study, recording their spells in a personal book of arcane secrets.",
 };
 function getClassDescription(className) {
-  return CLASS_DESCRIPTIONS[className] || "";
+  if (CLASS_DESCRIPTIONS[className]) return CLASS_DESCRIPTIONS[className];
+  const hb = HOMEBREW.classes.find((c) => c.name === className);
+  return (hb && hb.description) || "";
+}
+// Unlike Race/Class, no built-in subclass has ever had its own flavor-text
+// table - subclasses only ever showed up as a merged list of leveled
+// features (see collectFeaturesUpToLevel), never their own blurb. A
+// homebrew subclass now can, via homebrewSubclasses[].description (see
+// openHomebrewSubclassWizard) - this only ever returns homebrew text, and
+// "" for every built-in subclass, exactly as before.
+function getSubclassDescription(className, subclassName) {
+  if (!subclassName) return "";
+  const hb = HOMEBREW.subclasses.find((s) => s.className === className && s.name === subclassName);
+  return (hb && hb.description) || "";
 }
 function hitDieAverage(className) {
   let die = HIT_DICE[className];
@@ -2549,6 +4379,45 @@ const PASSIVE_SENSE_INFO = {
   "Passive Insight": { skill: "Insight", ability: "WIS" },
 };
 
+// 2024 PHB "Skill Proficiencies: Choose N from ..." table, one entry per
+// built-in class - same best-effort hand-compiled-table caveat as
+// HIT_DICE/CLASS_PRIMARY_ABILITY/CLASS_SAVING_THROWS above. `count` is what
+// the Skills section's proficiency cap (see buildCharSheetFields) actually
+// enforces, since a Background's own 2 fixed skills (BACKGROUND_DATA_2024
+// above) are separate and already auto-applied, not a free choice. `skills`
+// is kept alongside it purely so the cap's hint text can tell the player
+// which skills the class itself actually offers - picking a skill in this
+// plugin isn't restricted to that list, only how MANY can be checked at
+// once, so a DM-approved exception never gets silently blocked. A class
+// with no entry here (a homebrew class, or none chosen yet) falls back to
+// "choose 2, any skill" - see getClassSkillAllowance - so the cap still
+// does its job instead of leaving skills totally uncapped.
+const CLASS_SKILL_CHOICES = {
+  Artificer: { count: 2, skills: ["Arcana", "History", "Investigation", "Medicine", "Nature", "Perception", "Sleight of Hand"] },
+  Barbarian: { count: 2, skills: ["Animal Handling", "Athletics", "Intimidation", "Nature", "Perception", "Survival"] },
+  Bard: { count: 3, skills: STANDARD_SKILLS.map((s) => s.name) }, // "Choose any three."
+  Cleric: { count: 2, skills: ["History", "Insight", "Medicine", "Persuasion", "Religion"] },
+  Druid: { count: 2, skills: ["Arcana", "Animal Handling", "Insight", "Medicine", "Nature", "Perception", "Religion", "Survival"] },
+  Fighter: { count: 2, skills: ["Acrobatics", "Animal Handling", "Athletics", "History", "Insight", "Intimidation", "Perception", "Survival"] },
+  Monk: { count: 2, skills: ["Acrobatics", "Athletics", "History", "Insight", "Religion", "Stealth"] },
+  Paladin: { count: 2, skills: ["Athletics", "Insight", "Intimidation", "Medicine", "Persuasion", "Religion"] },
+  Ranger: { count: 3, skills: ["Animal Handling", "Athletics", "Insight", "Investigation", "Nature", "Perception", "Stealth", "Survival"] },
+  Rogue: { count: 4, skills: ["Acrobatics", "Athletics", "Deception", "Insight", "Intimidation", "Investigation", "Perception", "Performance", "Persuasion", "Sleight of Hand", "Stealth"] },
+  Sorcerer: { count: 2, skills: ["Arcana", "Deception", "Insight", "Intimidation", "Persuasion", "Religion"] },
+  Warlock: { count: 2, skills: ["Arcana", "Deception", "History", "Intimidation", "Investigation", "Nature", "Religion"] },
+  Wizard: { count: 2, skills: ["Arcana", "History", "Insight", "Investigation", "Medicine", "Religion"] },
+};
+// A background always grants exactly 2 fixed skills (BACKGROUND_DATA_2024
+// above) - not a free choice, so it doesn't count against a class's own
+// "choose N" allowance, but it does add to the total number of boxes that
+// can legitimately be checked at once.
+const BACKGROUND_SKILL_COUNT = 2;
+function getClassSkillAllowance(className) {
+  const entry = CLASS_SKILL_CHOICES[className];
+  if (entry) return entry;
+  return { count: 2, skills: null };
+}
+
 // ---- 2024 Backgrounds (Create Character wizard) ----
 // The 16 official 2024 Player's Handbook backgrounds, each granting: an
 // ability-score bonus split among 3 named abilities (+2/+1 or +1/+1/+1,
@@ -2582,6 +4451,36 @@ const BACKGROUND_DATA_2024 = {
   "Wayfarer": { abilities: ["dex", "wis", "cha"], skills: ["Insight", "Stealth"], tool: "Thieves' Tools", feat: "Lucky" },
 };
 const BACKGROUND_OPTIONS = [...Object.keys(BACKGROUND_DATA_2024), "Custom"];
+// Looks up a background's mechanical data, checking the built-in
+// BACKGROUND_DATA_2024 table first and falling back to a homebrew
+// background of the same name (see DEFAULT_SETTINGS.homebrewBackgrounds/
+// openHomebrewBackgroundWizard) - same "built-in always wins on a name
+// collision, same shape either way" pattern as getRaceTraits above. A
+// homebrew background's tool/feat may be blank strings (left that way in
+// the wizard) - callers that only care about abilities/skills (the Ability
+// Bonus panel, the auto-checked skills) don't need to special-case this,
+// but getBackgroundExtraFeatures below does, since it turns tool/feat into
+// Feature entries and must skip whichever one is blank instead of adding
+// an empty-named entry.
+function getBackgroundData(name) {
+  if (BACKGROUND_DATA_2024[name]) return BACKGROUND_DATA_2024[name];
+  const hb = HOMEBREW.backgrounds.find((b) => b.name === name);
+  if (!hb) return null;
+  return {
+    abilities: Array.isArray(hb.abilities) && hb.abilities.length === 3 ? hb.abilities : ["str", "dex", "con"],
+    skills: Array.isArray(hb.skills) ? hb.skills : [],
+    tool: hb.tool || "",
+    feat: hb.feat || "",
+  };
+}
+// Same idea as getBackgroundData, but the full option list for the
+// Background <select> - built-in names first (unchanged order/behavior),
+// then any homebrew background names, then "Custom" last (unchanged
+// position, since the wizard's own "is this Custom?" checks rely on it
+// being the final entry).
+function getAllBackgroundOptions() {
+  return [...Object.keys(BACKGROUND_DATA_2024), ...HOMEBREW.backgrounds.map((b) => b.name), "Custom"];
+}
 
 // Alternative ability-score-generation helpers offered on the Create
 // Character wizard's Basics page, alongside the wizard's long-standing
@@ -2954,6 +4853,108 @@ const SPELL_SLOT_TABLES = {
       "5": 2
     }
   },
+  "artificer": {
+    "1": {
+      "1": 2
+    },
+    "2": {
+      "1": 2
+    },
+    "3": {
+      "1": 3
+    },
+    "4": {
+      "1": 3
+    },
+    "5": {
+      "1": 4,
+      "2": 2
+    },
+    "6": {
+      "1": 4,
+      "2": 2
+    },
+    "7": {
+      "1": 4,
+      "2": 3
+    },
+    "8": {
+      "1": 4,
+      "2": 3
+    },
+    "9": {
+      "1": 4,
+      "2": 3,
+      "3": 2
+    },
+    "10": {
+      "1": 4,
+      "2": 3,
+      "3": 2
+    },
+    "11": {
+      "1": 4,
+      "2": 3,
+      "3": 3
+    },
+    "12": {
+      "1": 4,
+      "2": 3,
+      "3": 3
+    },
+    "13": {
+      "1": 4,
+      "2": 3,
+      "3": 3,
+      "4": 1
+    },
+    "14": {
+      "1": 4,
+      "2": 3,
+      "3": 3,
+      "4": 1
+    },
+    "15": {
+      "1": 4,
+      "2": 3,
+      "3": 3,
+      "4": 2
+    },
+    "16": {
+      "1": 4,
+      "2": 3,
+      "3": 3,
+      "4": 2
+    },
+    "17": {
+      "1": 4,
+      "2": 3,
+      "3": 3,
+      "4": 3,
+      "5": 1
+    },
+    "18": {
+      "1": 4,
+      "2": 3,
+      "3": 3,
+      "4": 3,
+      "5": 1
+    },
+    "19": {
+      "1": 4,
+      "2": 3,
+      "3": 3,
+      "4": 3,
+      "5": 2
+    },
+    "20": {
+      "1": 4,
+      "2": 3,
+      "3": 3,
+      "4": 3,
+      "5": 2
+    }
+  },
   "pact": {
     "1": {
       "1": 1
@@ -3122,9 +5123,9 @@ const SPELL_SLOT_TABLES = {
 // of the problem); the only real fix is for the companion files to never
 // textually contain the character's name in the first place.
 // Vaults set up before this change already have folders named after each
-// character - migrateToOpaqueDataFolderIds() below (wired to the
-// "Migrate" button in Settings > D&D 2024 Character Sheet > Character
-// data folder) moves those over to an id, once.
+// character - those stay that way (see companionFilePath()'s own fallback
+// below for the rare vault that still has one); only a brand-new
+// character's data folder is guaranteed to be an opaque id.
 // All trackers and standalone functions that read/write a companion file
 // should go through companionFilePath()/ensureCharacterFile() below
 // rather than building the path themselves, so this stays the single
@@ -3355,6 +5356,39 @@ function findPartyForCharacter(itData, mainFile) {
   }
   const party = itData.parties.find((p) => Array.isArray(p.players) && p.players.includes(charName));
   return party ? party.name : null;
+}
+
+// Pure decision logic behind HpTracker.pullInitiativeTrackerCombatHp above
+// (see there for the full rationale). Free of Obsidian API calls so it's
+// directly unit-testable - see test/run_test_it_hp_pull.js. Reads
+// Initiative Tracker's own live-encounter state (itData.state, the same
+// data.json shape getInitiativeTrackerData returns) and, only while an
+// encounter is actually in progress (state.state === true), looks for a
+// player combatant whose path matches this character's own note. Returns
+// the {hp_current, hp_max, armor_class} to write if that combatant's
+// current values differ from fm's, or null if there's nothing to do (no
+// active encounter, this character isn't a creature in it, or nothing
+// actually changed) - callers write nothing on a null result.
+function resolveInitiativeTrackerCombatHpPull(fm, itData, mainFilePath) {
+  const state = itData && itData.state;
+  if (!state || state.state !== true || !Array.isArray(state.creatures)) return null;
+
+  const combatant = state.creatures.find((c) => c && c.player && c.path === mainFilePath);
+  if (!combatant) return null;
+
+  const hasHpCurrent = Number.isFinite(combatant.currentHP);
+  const hasHpMax = Number.isFinite(combatant.currentMaxHP);
+  const hasAc = combatant.currentAC !== undefined && combatant.currentAC !== null;
+
+  const nextHpCurrent = hasHpCurrent ? combatant.currentHP : fm.hp_current;
+  const nextHpMax = hasHpMax ? combatant.currentMaxHP : fm.hp_max;
+  const nextAc = hasAc ? Number(combatant.currentAC) : fm.armor_class;
+
+  if (fm.hp_current === nextHpCurrent && fm.hp_max === nextHpMax && fm.armor_class === nextAc) {
+    return null;
+  }
+
+  return { hp_current: nextHpCurrent, hp_max: nextHpMax, armor_class: nextAc };
 }
 
 // Creates (or returns the existing) shared Inventory.md for a party, at a
@@ -3688,6 +5722,67 @@ class HpTracker extends MarkdownRenderChild {
     );
   }
 
+  // ---- Initiative Tracker combat-HP pull ----
+  // The reverse of OverviewTracker.syncInitiativeTrackerFrontmatter: that
+  // one pushes this character's own AC/HP/initiative onto plain mirror
+  // keys so Initiative Tracker's "Link to Note" autofill picks up fresh
+  // values. This pulls the other way, bringing live combat HP back from
+  // Initiative Tracker's own in-encounter state into this character's
+  // real hp_current/hp_max/armor_class fields.
+  //
+  // Initiative Tracker never writes to a linked note during combat -
+  // confirmed by reading its own installed main.js directly: its one
+  // processFrontMatter call only fires from its Add/Edit Player dialog's
+  // Save button (writing ac/hp/level/modifier), never from in-combat
+  // damage/heal. All live combat HP instead lives purely in Initiative
+  // Tracker's own data.json, under a state.creatures[] array while an
+  // encounter is actively running (state.state === true), each entry
+  // keyed by the linked note's own vault path - same read-only
+  // getInitiativeTrackerData() helper already used for Party Inventory,
+  // just reading a different part of the same file. The actual decision
+  // logic lives in the pure resolveInitiativeTrackerCombatHpPull() below
+  // (see there for the test suite) - this method is just the thin I/O
+  // wrapper (read itData, call it, write the result if any).
+  //
+  // Deliberately only called from the "no overrideFm" branch of render()
+  // above - i.e. only on a natural note open/reopen, not on a re-render
+  // triggered by this tracker's own just-written data or another
+  // tracker's cross-notify event. This matches the "refresh when you
+  // reopen the note, not a live push across two open panes" choice used
+  // everywhere else in this plugin (confirmed fine with the user rather
+  // than building a heavier file-polling mechanism).
+  //
+  // NOTE: this only sees combat run from Initiative Tracker *in the same
+  // vault* as the note being opened - Test Vault and Mobile Vault are
+  // separate Obsidian vaults with their own independent Initiative
+  // Tracker installs/data.json, so a character viewed on Mobile Vault
+  // won't pick up HP from an encounter the GM is actually running in
+  // Test Vault's own Initiative Tracker, and vice versa.
+  //
+  // Returns the freshly-written frontmatter if a pull+write happened, or
+  // null if there was nothing to do - render() swaps the returned object
+  // in for fm in place of a second metadataCache read, same pattern used
+  // everywhere else in this plugin.
+  async pullInitiativeTrackerCombatHp(fm) {
+    try {
+      const itData = await getInitiativeTrackerData(this.app);
+      const next = resolveInitiativeTrackerCombatHpPull(fm, itData, this.mainFile.path);
+      if (!next) return null;
+
+      let written = null;
+      await this.app.fileManager.processFrontMatter(this.mainFile, (writeFm) => {
+        writeFm.hp_current = next.hp_current;
+        writeFm.hp_max = next.hp_max;
+        writeFm.armor_class = next.armor_class;
+        written = writeFm;
+      });
+      return written;
+    } catch (e) {
+      console.error("D&D Character Sheet: failed to pull Initiative Tracker combat HP", e);
+      return null;
+    }
+  }
+
   getConditionsSubPath() {
     return companionFilePath(this.app, this.mainFile, "Conditions");
   }
@@ -3745,6 +5840,11 @@ class HpTracker extends MarkdownRenderChild {
     } else {
       const cache = this.app.metadataCache.getFileCache(file);
       fm = (cache && cache.frontmatter) || {};
+      // Only pulled on this natural "note just opened/reopened" path, not
+      // when overrideFm was passed in - see pullInitiativeTrackerCombatHp
+      // below for why.
+      const pulled = await this.pullInitiativeTrackerCombatHp(fm);
+      if (pulled) fm = pulled;
     }
     const isDead = (fm.cssclasses || []).includes("dead");
 
@@ -4090,13 +6190,12 @@ const MOBILE_NAV_PAGES = [
   // from the main "Jump to..." menu - it was previously a menu page
   // labeled "Background", which undersold what it actually shows.
   { key: "background", label: "Overview", menu: false },
-  // Proficiencies & Training (just the Proficiency Bonus number today - see
-  // the entry above about the lack of a Languages display) is a single
-  // number, cheap enough to show directly in the header's own button text
-  // rather than making the player tap through to a whole page just to read
-  // one number - same "header-reachable, not menu-listed" treatment as
-  // Overview/Hit Points/Conditions.
-  { key: "proficiencies", label: "Proficiencies & Training", menu: false },
+  // Proficiencies & Training shows the Proficiency Bonus number right on
+  // the header button (cheap enough not to need a whole page tap just to
+  // read one number), but unlike Overview/Hit Points/Conditions above, it's
+  // also worth being able to jump to directly from the "Jump to..." menu -
+  // so, unlike those three, this entry is NOT given menu: false.
+  { key: "proficiencies", label: "Proficiencies & Training" },
 ];
 
 // ---- Mobile (phone-width) app-style navigation ----
@@ -4218,7 +6317,7 @@ class MobileNavTracker extends MarkdownRenderChild {
 
   openMenu(activeKey) {
     this.closeMenu();
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "mobile-nav-menu-overlay";
     const sheet = overlay.createEl("div", { cls: "mobile-nav-menu-sheet" });
 
@@ -4241,7 +6340,7 @@ class MobileNavTracker extends MarkdownRenderChild {
       if (e.target === overlay) this.closeMenu();
     };
 
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
     this.menuEl = overlay;
   }
 
@@ -4764,6 +6863,261 @@ creatures_list: []
   }
 }
 
+// ===================================================================
+// Character Tracker block (`character-tracker`, 2026-10-13, renamed from
+// `encounter-tracker` + rebuilt as a card grid 2026-10-14 - see
+// CreaturesTracker above for GM creature lists instead, which this block
+// no longer shows at all) - a GM note's party roster: a small rectangular
+// card per PC - a big portrait (same rectangular, object-fit:cover,
+// rounded-corner treatment as the character sheet's own main portrait on
+// the mobile layout, not a tiny circular icon) with name/live AC/live
+// current-max HP underneath - for a named Party group and/or individually
+// added players. Data is stored the same way as every other tab (a
+// companion "Character Tracker.md" file via ensureCharacterFile,
+// re-rendered on every change - see render(overrideFm) below and the "No
+// metadataCache.on('changed')" convention noted at the top of this file),
+// so PC stats refresh whenever this block re-renders (opening the note,
+// switching back to it) rather than instantly while two panes are open
+// side by side, exactly like HpTracker/MobileNavTracker.
+// ===================================================================
+
+// Resolves the tracker's full roster: every member of the selected named
+// Party group (by id) plus any individually-added overrides, deduped by
+// link text so a PC picked both via their group and as an override only
+// shows once. Pure (no Obsidian API calls) so it's unit-testable directly -
+// see domtest/run_test_encounter.js.
+function resolveCharacterTrackerRoster(partyGroups, groupId, overrides) {
+  const group = (partyGroups || []).find((g) => g.id === groupId);
+  const groupMembers = (group && group.members) || [];
+  const seen = new Set();
+  const roster = [];
+  for (const link of [...groupMembers, ...(overrides || [])]) {
+    const key = String(link || "").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    roster.push({ link: key, fromGroup: groupMembers.includes(key) });
+  }
+  return roster;
+}
+
+// Bloodied/dead CSS state for a PC card, from their live hp_current/hp_max
+// frontmatter - "dead" at 0 HP, "bloodied" at or below half, else "ok".
+// Pure for the same reason as resolveCharacterTrackerRoster above.
+function hpStatusClass(hpCurrent, hpMax) {
+  const cur = Number(hpCurrent) || 0;
+  const max = Number(hpMax) || 0;
+  if (cur <= 0) return "dead";
+  if (max > 0 && cur <= max / 2) return "bloodied";
+  return "ok";
+}
+
+// Colors the free-text Difficulty field by keyword - covers both the
+// popular 2014-style Easy/Medium/Hard/Deadly scale (see the Initiative
+// Tracker community plugin's own `encounter` block, which this block was
+// originally modeled after) and the 2024 DMG's Low/Moderate/High wording,
+// without forcing either vocabulary via a rigid dropdown. Unrecognized/
+// blank text just gets no color class.
+function characterTrackerDifficultyClass(text) {
+  const t = String(text || "").trim().toLowerCase();
+  if (!t) return "";
+  if (/deadly/.test(t)) return "difficulty-deadly";
+  if (/hard|high/.test(t)) return "difficulty-hard";
+  if (/medium|moderate/.test(t)) return "difficulty-medium";
+  if (/easy|low|trivial/.test(t)) return "difficulty-easy";
+  return "";
+}
+
+class CharacterTracker extends MarkdownRenderChild {
+  constructor(containerEl, app, mainFile) {
+    super(containerEl);
+    this.app = app;
+    this.mainFile = mainFile;
+    this.subFile = null;
+  }
+
+  async onload() {
+    this.subFile = await ensureCharacterFile(
+      this.app,
+      this.mainFile,
+      "Character Tracker",
+      `---
+cssclasses:
+  - dnd-sheet
+tracker_name: ""
+tracker_difficulty: ""
+party_group: ""
+party_overrides: []
+---
+`
+    );
+    await this.render();
+  }
+
+  getPlugin() {
+    return this.app.plugins.plugins["dnd-2024-character-sheet"];
+  }
+
+  async render(overrideFm) {
+    const el = this.containerEl;
+    el.empty();
+    // Every .character-tracker-* CSS rule is scoped under .dnd-sheet (the
+    // plugin's styles.css convention), which a PC's own character-sheet
+    // note always carries via its frontmatter's cssclasses: [dnd-sheet] -
+    // but this block is meant to be dropped into a plain GM note, which
+    // has no such frontmatter and so has no .dnd-sheet ancestor anywhere.
+    // Without it, every scoped rule silently fails to match and the
+    // portrait renders unstyled at its native size (the "full picture,
+    // not smaller in any way" bug reported 2026-10-14). Adding the class
+    // directly to this block's own container makes it self-sufficient
+    // regardless of what kind of note it's embedded in.
+    el.addClass("dnd-sheet");
+    el.addClass("dnd-sheet-character-tracker");
+
+    let fm;
+    if (overrideFm) {
+      fm = overrideFm;
+    } else {
+      const cache = this.app.metadataCache.getFileCache(this.subFile);
+      fm = (cache && cache.frontmatter) || {};
+    }
+    const partyOverrides = Array.isArray(fm.party_overrides) ? fm.party_overrides : [];
+    const plugin = this.getPlugin();
+    const partyGroups = (plugin && plugin.settings && plugin.settings.partyGroups) || [];
+
+    const saveSub = async (mutator) => {
+      let resultFm;
+      await this.app.fileManager.processFrontMatter(this.subFile, (f) => {
+        mutator(f);
+        resultFm = f;
+      });
+      await this.render(resultFm);
+    };
+
+    // ---- Header: Name + Difficulty (optional, e.g. for an encounter or
+    // scene this roster belongs to - leave blank to skip it entirely) ----
+    const header = el.createEl("div", { cls: "character-tracker-header" });
+    const nameInput = header.createEl("input", {
+      cls: "character-tracker-name-input",
+      attr: { type: "text", placeholder: "Name (optional)..." },
+    });
+    nameInput.value = fm.tracker_name || "";
+    nameInput.addEventListener("blur", async () => {
+      if (nameInput.value === (fm.tracker_name || "")) return;
+      await saveSub((f) => {
+        f.tracker_name = nameInput.value;
+      });
+    });
+    const diffWrap = header.createEl("div", {
+      cls: `character-tracker-difficulty ${characterTrackerDifficultyClass(fm.tracker_difficulty)}`,
+    });
+    const diffInput = diffWrap.createEl("input", {
+      cls: "character-tracker-difficulty-input",
+      attr: { type: "text", placeholder: "Difficulty (optional)..." },
+    });
+    diffInput.value = fm.tracker_difficulty || "";
+    diffInput.addEventListener("blur", async () => {
+      if (diffInput.value === (fm.tracker_difficulty || "")) return;
+      await saveSub((f) => {
+        f.tracker_difficulty = diffInput.value;
+      });
+    });
+
+    // ---- Group picker ----
+    const groupSelect = el.createEl("select", { cls: "dropdown character-tracker-group-select" });
+    groupSelect.createEl("option", { attr: { value: "" }, text: "— No group —" });
+    for (const g of partyGroups) {
+      const opt = groupSelect.createEl("option", { attr: { value: g.id }, text: g.name || "Unnamed Party" });
+      if (g.id === fm.party_group) opt.selected = true;
+    }
+    groupSelect.onchange = async () => {
+      await saveSub((f) => {
+        f.party_group = groupSelect.value;
+      });
+    };
+
+    // ---- Character cards - small rectangular tiles, each with a big
+    // portrait on top (full card width, matching the character sheet's
+    // own mobile-layout portrait treatment) and all of that PC's info
+    // packed underneath. ----
+    const roster = resolveCharacterTrackerRoster(partyGroups, fm.party_group, partyOverrides);
+    const cardsEl = el.createEl("div", { cls: "character-tracker-cards" });
+    if (!roster.length) {
+      cardsEl.createEl("div", { cls: "linked-note-empty", text: "No characters selected." });
+    }
+    for (const member of roster) {
+      const basenameMatch = member.link.match(/^\[\[(.+?)\]\]$/);
+      const basename = basenameMatch ? basenameMatch[1] : member.link;
+      const target = this.app.metadataCache.getFirstLinkpathDest(basename, this.mainFile.path);
+      const card = cardsEl.createEl("div", { cls: "character-tracker-card" });
+      const pfm = target ? (this.app.metadataCache.getFileCache(target) || {}).frontmatter || {} : {};
+      const portraitWrap = card.createEl("div", { cls: "character-tracker-portrait" });
+      const imgPath = pfm.cover || "";
+      const imgFile = imgPath ? this.app.metadataCache.getFirstLinkpathDest(imgPath, target ? target.path : "") : null;
+      if (imgFile) {
+        portraitWrap.createEl("img", { attr: { src: this.app.vault.getResourcePath(imgFile) } });
+      } else {
+        const initial = String(pfm.character_name || basename || "?").trim().charAt(0).toUpperCase() || "?";
+        portraitWrap.createEl("div", { cls: "character-tracker-portrait-fallback", text: initial });
+      }
+      if (member.fromGroup) {
+        portraitWrap.createEl("span", {
+          cls: "character-tracker-group-tag",
+          text: "group",
+          attr: { title: "Edit this group in Settings > Party Groups" },
+        });
+      }
+      // Intentionally no remove (✕) control on the portrait: users should not be able
+      // to accidentally delete a character card from the tracker by hovering/clicking it.
+      const infoWrap = card.createEl("div", { cls: "character-tracker-info" });
+      if (target) {
+        infoWrap.createEl("a", { cls: "internal-link character-tracker-name", text: pfm.character_name || basename, href: target.path });
+      } else {
+        infoWrap.createEl("span", { cls: "character-tracker-name", text: `${basename} (not found)` });
+      }
+      const statsRow = infoWrap.createEl("div", { cls: "character-tracker-stats" });
+      statsRow.createEl("span", { cls: "character-tracker-ac", text: `AC ${pfm.armor_class ?? "-"}` });
+      statsRow.createEl("span", {
+        cls: `character-tracker-hp character-tracker-hp-${hpStatusClass(pfm.hp_current, pfm.hp_max)}`,
+        text: `${pfm.hp_current ?? "-"}/${pfm.hp_max ?? "-"} HP`,
+      });
+    }
+
+    // ---- Add an individual PC on top of whichever group is selected ----
+    const addForm = el.createEl("div", { cls: "add-spell-form linked-note-add-form" });
+    const addInput = addForm.createEl("input", {
+      type: "text",
+      cls: "spell-add-input",
+      attr: { placeholder: "Character name...", list: "character-tracker-add-datalist" },
+    });
+    const addBtn = addForm.createEl("button", { cls: "action-btn-update spell-add-btn", text: "Add Character" });
+    const datalistEl = addForm.createEl("datalist", { attr: { id: "character-tracker-add-datalist" } });
+    const playerCandidates = getAllPlayerNotes(this.app);
+    const rosterLinks = new Set(roster.map((m) => m.link));
+    for (const c of playerCandidates) {
+      if (rosterLinks.has(`[[${c.file.basename}]]`)) continue;
+      datalistEl.createEl("option", { attr: { value: c.file.basename } });
+    }
+    addBtn.onclick = async () => {
+      const typed = (addInput.value || "").trim();
+      if (!typed) return;
+      const match = playerCandidates.find((c) => c.file.basename.toLowerCase() === typed.toLowerCase());
+      if (!match) {
+        new Notice(`No player note found named "${typed}".`);
+        return;
+      }
+      const link = `[[${match.file.basename}]]`;
+      if (rosterLinks.has(link)) {
+        new Notice(`${match.file.basename} is already shown here.`);
+        return;
+      }
+      await saveSub((f) => {
+        f.party_overrides = f.party_overrides || [];
+        f.party_overrides.push(link);
+      });
+    };
+  }
+}
+
 
 // ===================================================================
 // Equipment math - turns an equipped inventory item's linked item note
@@ -5066,18 +7420,17 @@ function computeWeaponAction(itemName, weaponFm, ctx) {
 }
 
 // A handful of species trade the normal unarmed strike's flat Bludgeoning
-// damage for a die of a different type via a natural weapon - none of the
-// 9 SRD 5.2.1 species have one, but a homebrew race might (added via the
-// Homebrew Content wizards). Every such trait in RACE_TRAITS/homebrew races
-// already spells this out in its own description text ("Your unarmed
-// strikes with your talons deal 1d4 slashing damage."), so this scans that
-// text for the pattern instead of hand-maintaining a second copy of the
-// same data that could drift out of sync with it. Only the first matching
-// trait wins (no known race grants more than one natural weapon). A couple
-// of these traits let the player choose between two damage types (e.g.
-// "piercing or slashing, your choice") - this just picks whichever type is
-// mentioned first, which won't always be the player's actual pick; that's a
-// known simplification,
+// damage for a die of a different type via a natural weapon (Aarakocra's
+// Talons, Tabaxi's Cat's Claws, Lizardfolk's Bite, etc.) - every such trait
+// in RACE_TRAITS/homebrew races already spells this out in its own
+// description text ("Your unarmed strikes with your talons deal 1d4
+// slashing damage."), so this scans that text for the pattern instead of
+// hand-maintaining a second copy of the same data that could drift out of
+// sync with it. Only the first matching trait wins (no known race grants
+// more than one natural weapon). A couple of these traits let the player
+// choose between two damage types (e.g. Shifter's "piercing or slashing,
+// your choice") - this just picks whichever type is mentioned first, which
+// won't always be the player's actual pick; that's a known simplification,
 // not a bug, and the generated row can't be hand-edited to fix it since
 // it's recomputed every render (same limitation as any other auto-generated
 // Actions row - see the "source: inventory" rows' own tooltip).
@@ -5283,15 +7636,23 @@ function computeArmorClassFromEquipped(equippedArmorFms, dexMod) {
 // Shared by SpellsTracker (its own Modifier/Spell Attack/Save DC stat row)
 // and resyncInventoryEffects below (attack-cantrip Actions-tab rows) -
 // computes a character's spellcasting ability modifier, spell attack bonus,
-// and save DC from their class list and ability modifiers. Uses the same
-// "first spellcasting class in the list wins" simplification as everywhere
-// else in this file for a multiclass caster (e.g. collectClassSelections).
-// Returns a null spellAbilityKey (and a 0 modifier/bonus) if nothing in the
-// class list actually grants spellcasting at all.
+// and save DC from their class list, subclass (Eldritch Knight/Arcane
+// Trickster cast off INT regardless of their base Fighter/Rogue class - see
+// THIRD_CASTER_SUBCLASSES), and ability modifiers. Uses the same "first
+// spellcasting class in the list wins" simplification as everywhere else in
+// this file for a multiclass caster (e.g. collectClassSelections). Returns
+// a null spellAbilityKey (and a 0 modifier/bonus) if nothing in the class
+// list actually grants spellcasting at all.
 function computeSpellcastingStats(mainFm, abilitiesFm) {
   const classNames = String(mainFm.class || "").split(" / ").map((s) => s.trim()).filter(Boolean);
+  const subclassNames = String(abilitiesFm.subclass || "").split(" / ").map((s) => s.trim()).filter(Boolean);
   let spellAbilityKey = null;
   for (let i = 0; i < classNames.length; i++) {
+    const sub = subclassNames[i] || "";
+    if (THIRD_CASTER_SUBCLASSES.includes(sub.toLowerCase())) {
+      spellAbilityKey = "int"; // Eldritch Knight and Arcane Trickster both cast off INT
+      break;
+    }
     const key = SPELLCASTING_ABILITY_BY_CLASS[classNames[i].toLowerCase()];
     if (key) {
       spellAbilityKey = key;
@@ -6290,7 +8651,7 @@ class InventoryTracker extends MarkdownRenderChild {
   // that used to be dedicated row columns.
   async openItemDetailModal(entry, opts) {
     const { item, idx, linkedFile, linkedFm } = entry;
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "action-modal-overlay";
     const modal = overlay.createEl("div", { cls: "action-modal item-detail-modal" });
 
@@ -6396,7 +8757,7 @@ class InventoryTracker extends MarkdownRenderChild {
     const closeBtn = btnRow.createEl("button", { text: "Close" });
     closeBtn.onclick = () => overlay.remove();
 
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
   }
 
   // ---- Attunement page: D&D Beyond's own layout - 3 physical attunement
@@ -6516,7 +8877,7 @@ class InventoryTracker extends MarkdownRenderChild {
   }
 
   openCurrencyModal(targetFile, currency, isParty) {
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "action-modal-overlay";
     const modal = overlay.createEl("div", { cls: "action-modal currency-modal" });
     modal.createEl("h3", { text: "Manage Coins" });
@@ -6557,11 +8918,11 @@ class InventoryTracker extends MarkdownRenderChild {
       await this.afterWrite(resultFm, isParty);
     };
 
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
   }
 
   openAddInventoryModal(targetFile, isParty) {
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "action-modal-overlay";
     const modal = overlay.createEl("div", { cls: "action-modal add-item-modal" });
     modal.createEl("h3", { text: "Add Item" });
@@ -6611,11 +8972,11 @@ class InventoryTracker extends MarkdownRenderChild {
       await this.afterWrite(resultFm, isParty);
     };
 
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
   }
 
   openInventoryModal(items, targetFile, isParty) {
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "action-modal-overlay";
     const modal = overlay.createEl("div", { cls: "action-modal" });
     modal.createEl("h3", { text: "Edit Inventory" });
@@ -6682,7 +9043,7 @@ class InventoryTracker extends MarkdownRenderChild {
       await this.afterWrite(resultFm, isParty);
     };
 
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
   }
 }
 
@@ -6761,6 +9122,7 @@ function guessFeatureCategory(name) {
   for (const race of HOMEBREW.races) {
     if ((race.traits || []).some((t) => matches(t.name))) return "Species Trait";
   }
+  if (HOMEBREW.ancestries.some((a) => matches(a.traitName))) return "Species Trait";
   for (const levels of Object.values(CLASS_LEVEL_FEATURES)) {
     for (const list of Object.values(levels)) {
       if (Array.isArray(list) && list.some((feat) => matches(feat.name))) return "Class Feature";
@@ -6989,7 +9351,7 @@ class FeaturesTracker extends MarkdownRenderChild {
   }
 
   openAddFeatureModal() {
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "action-modal-overlay";
     const modal = overlay.createEl("div", { cls: "action-modal action-modal-feature" });
     modal.createEl("h3", { text: "Add Feature" });
@@ -7066,11 +9428,11 @@ class FeaturesTracker extends MarkdownRenderChild {
       await this.render(resultFm);
     };
 
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
   }
 
   openEditFeaturesModal(items) {
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "action-modal-overlay";
     const modal = overlay.createEl("div", { cls: "action-modal action-modal-feature" });
     modal.createEl("h3", { text: "Edit Features" });
@@ -7154,7 +9516,7 @@ class FeaturesTracker extends MarkdownRenderChild {
       await this.render(resultFm);
     };
 
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
   }
 }
 
@@ -7574,7 +9936,7 @@ class ActionsTracker extends MarkdownRenderChild {
   // reusing the same overlay/modal CSS so it matches the sheet's existing
   // popup look without needing new styling of its own.
   openActionInfoModal(name, description) {
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "action-modal-overlay";
     const modal = overlay.createEl("div", { cls: "action-modal action-modal-info" });
     modal.createEl("h3", { text: name });
@@ -7582,11 +9944,11 @@ class ActionsTracker extends MarkdownRenderChild {
     const btnRow = modal.createEl("div", { cls: "action-modal-btnrow" });
     const closeBtn = btnRow.createEl("button", { cls: "action-btn-update", text: "Close" });
     closeBtn.onclick = () => overlay.remove();
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
   }
 
   openAddActionModal() {
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "action-modal-overlay";
     const modal = overlay.createEl("div", { cls: "action-modal" });
     modal.createEl("h3", { text: "Add Action" });
@@ -7663,11 +10025,11 @@ class ActionsTracker extends MarkdownRenderChild {
       await this.render(resultFm);
     };
 
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
   }
 
   openActionsModal(items) {
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "action-modal-overlay";
     const modal = overlay.createEl("div", { cls: "action-modal action-modal-actions" });
     modal.createEl("h3", { text: "Edit Actions" });
@@ -7783,7 +10145,7 @@ class ActionsTracker extends MarkdownRenderChild {
       await this.render(resultFm);
     };
 
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
   }
 }
 
@@ -7791,15 +10153,16 @@ class ActionsTracker extends MarkdownRenderChild {
 const CLASS_PROGRESSION = {
   bard: "full", cleric: "full", druid: "full", sorcerer: "full", wizard: "full",
   paladin: "half", ranger: "half",
+  artificer: "artificer",
   warlock: "pact",
 };
+const THIRD_CASTER_SUBCLASSES = ["eldritch knight", "arcane trickster"];
 // Spellcasting ability per class (2024 rules - unchanged from 2014 here).
-// The SRD 5.2.1's 12 classes cover every spellcasting class here directly
-// (no third-caster subclass like Eldritch Knight/Arcane Trickster is part
-// of the SRD-only fork's scope, so no special-case lookup is needed
-// wherever this table is consulted).
+// Eldritch Knight/Arcane Trickster aren't listed since both use INT
+// regardless of their base class (Fighter/Rogue) - handled as a special
+// case wherever this table is consulted instead of listed here.
 const SPELLCASTING_ABILITY_BY_CLASS = {
-  wizard: "int",
+  wizard: "int", artificer: "int",
   cleric: "wis", druid: "wis", ranger: "wis",
   bard: "cha", paladin: "cha", sorcerer: "cha", warlock: "cha",
 };
@@ -7955,8 +10318,9 @@ class SpellsTracker extends MarkdownRenderChild {
     // ---- Spellcasting Modifier / Spell Attack / Save DC ----
     // These were free-typed fields, but none of the three is actually
     // independent - they all derive from whichever class grants
-    // spellcasting (INT for Wizard, WIS for Cleric/Druid/Ranger, CHA for
-    // Bard/Paladin/Sorcerer/Warlock) plus proficiency bonus, so there's nothing left to
+    // spellcasting (INT for Wizard/Artificer/Eldritch Knight/Arcane
+    // Trickster, WIS for Cleric/Druid/Ranger, CHA for Bard/Paladin/
+    // Sorcerer/Warlock) plus proficiency bonus, so there's nothing left to
     // type in - compute and show as plain text instead (same "stat-value"
     // convention as the read-only Saves/Skills/Senses display elsewhere on
     // this sheet). 2026-09-23: this math moved into the shared
@@ -8057,13 +10421,15 @@ class SpellsTracker extends MarkdownRenderChild {
 
     // ---- Leveled, class-aware spell slot tracker (real multiclass support) ----
     const classNames = String(fm.class || "").split(" / ").map((s) => s.trim()).filter(Boolean);
+    const subclassNames = String(abilitiesFm.subclass || "").split(" / ").map((s) => s.trim()).filter(Boolean);
     const classLevelsFm = abilitiesFm.class_levels || {};
+    const isThirdCasterSheet = subclassNames.some((s) => THIRD_CASTER_SUBCLASSES.includes(s.toLowerCase()));
     const levelForClass = (cname) =>
       classNames.length <= 1 ? Number(fm.level) || 0 : Number(classLevelsFm[cname]) || 0;
     const classProgressions = classNames
       .map((cname) => {
         const key = cname.toLowerCase();
-        const type = CLASS_PROGRESSION[key];
+        const type = CLASS_PROGRESSION[key] || (isThirdCasterSheet ? "third" : undefined);
         return { name: cname, type, level: levelForClass(cname) };
       })
       .filter((c) => c.type);
@@ -8086,12 +10452,18 @@ class SpellsTracker extends MarkdownRenderChild {
     if (otherCasters.length === 1 && !warlockEntry) {
       const only = otherCasters[0];
       combinedTable = this.lookupTable(spellSlotTables, edition, only.type, only.level);
-      combinedTitle = only.name;
+      const label =
+        only.type === "third"
+          ? subclassNames.find((s) => THIRD_CASTER_SUBCLASSES.includes(s.toLowerCase())) || only.name
+          : only.name;
+      combinedTitle = label;
     } else if (otherCasters.length >= 1) {
       let combinedLevel = 0;
       for (const c of otherCasters) {
         if (c.type === "full") combinedLevel += c.level;
         else if (c.type === "half") combinedLevel += Math.floor(c.level / 2);
+        else if (c.type === "third") combinedLevel += Math.floor(c.level / 3);
+        else if (c.type === "artificer") combinedLevel += Math.ceil(c.level / 2);
       }
       combinedTable = this.lookupTable(spellSlotTables, edition, "full", combinedLevel);
       combinedTitle = otherCasters.map((c) => c.name).join(" / ");
@@ -8644,6 +11016,23 @@ function getAllMonsterNotes(app) {
   return results;
 }
 
+// Every #Player note in the vault - every character sheet the "+ Create
+// Character" wizard makes gets this tag (see createCharacterNote's
+// frontmatter template above). Candidate pool for the Encounter block's
+// party picker and for Settings > Party Groups.
+function getAllPlayerNotes(app) {
+  const files = app.vault.getMarkdownFiles();
+  const results = [];
+  for (const f of files) {
+    if (isTemplateNote(app, f)) continue;
+    const cache = app.metadataCache.getFileCache(f);
+    if (!cache) continue;
+    const tags = getAllTags(cache) || [];
+    if (tags.includes("#Player")) results.push({ file: f, fm: cache.frontmatter || {} });
+  }
+  return results;
+}
+
 // Every non-template note in the vault, untagged - the unrestricted
 // candidate pool for the Notes tab's "Other" section. Unlike Organizations/
 // Allies/Enemies, D&D Beyond's own "Other" notes list isn't scoped to any
@@ -8847,18 +11236,25 @@ async function getAllFeatNotes(app) {
     const repeatLine = /\*\*Opakovatelný:\*\*\s*(.+)/.exec(czechRaw);
     const asiLine = /\*\*Zvýšení vlastnosti:\*\*\s*(.+)/.exec(czechRaw);
     // The description shown/copied for a picked feat is the note body
-    // minus its H1, its own metadata block, and the trailing source
-    // citation + #Feat tag - those are either redundant with what the
-    // picker already shows separately (prereq) or not meaningful outside
-    // the note itself (source, tag).
-    let body = czechRaw.replace(/^#[^\n]*\n/, "");
+    // minus any leading YAML frontmatter block (homebrew notes only, see
+    // buildHomebrewFeatNote - official library notes have none, so this is
+    // a no-op for them), its H1, its own metadata block, and the trailing
+    // source citation + #Feat tag - those are either redundant with what
+    // the picker already shows separately (prereq) or not meaningful
+    // outside the note itself (source, tag).
+    let body = czechRaw
+      .replace(/^---\n[\s\S]*?\n---\n+/, "")
+      .replace(/^#[^\n]*\n/, "");
     body = body
       .replace(/\*\*Typ:\*\*[^\n]*\n?/, "")
       .replace(/\*\*Předpoklad:\*\*[^\n]*\n?/, "")
       .replace(/\*\*Opakovatelný:\*\*[^\n]*\n?/, "")
       .replace(/\*\*Zvýšení vlastnosti:\*\*[^\n]*\n?/, "")
       .replace(/\*Zdroj:[^*]*\*/, "")
-      .replace(/#Feat\s*$/, "")
+      // Strips the trailing "#Feat" tag line so it never leaks into the
+      // picker-shown description (kept as a run-of-tags stripper, not an
+      // exact "#Feat" match, in case a note ever ends with more than one).
+      .replace(/(?:#\w+\s*)+$/, "")
       .trim();
 
     // English display fields: the name comes from the note's established
@@ -8906,23 +11302,32 @@ async function getAllFeatNotes(app) {
 // vault yet (e.g. the Rysy (Feats) library hasn't been copied to this
 // particular vault copy), falls back to just the bare feat name with no
 // description rather than silently dropping it - same "guessed" fallback
-// style as guessFeatureCategory.
+// style as guessFeatureCategory. Looks up via getBackgroundData, so this
+// works identically for a homebrew background - and, since a homebrew
+// background's tool/feat are optional (left blank in the wizard when the
+// source material doesn't specify one - see openHomebrewBackgroundWizard),
+// each entry below is only added when that field is actually non-blank,
+// instead of adding a "Tool Proficiency: " or feat-less entry.
 function getBackgroundExtraFeatures(backgroundName, allFeatNotes) {
-  const data = BACKGROUND_DATA_2024[backgroundName];
+  const data = getBackgroundData(backgroundName);
   if (!data) return [];
-  const featNote = (allFeatNotes || []).find((f) => f.nameEn === data.feat);
-  return [
-    {
+  const extras = [];
+  if (data.feat) {
+    const featNote = (allFeatNotes || []).find((f) => f.nameEn === data.feat);
+    extras.push({
       name: featNote ? featNote.nameEn : data.feat,
       description: featNote ? featNote.descriptionEn : "",
       category: "Feat",
-    },
-    {
+    });
+  }
+  if (data.tool) {
+    extras.push({
       name: `Tool Proficiency: ${data.tool}`,
       description: `Granted by the ${backgroundName} background.`,
       category: "Other",
-    },
-  ];
+    });
+  }
+  return extras;
 }
 
 // Builds a wikilink that resolves to exactly this file, even when another
@@ -8946,8 +11351,8 @@ function buildItemWikilink(file) {
 // ---- Spell-choice access, for the "Create Character sheet" wizard's
 // Spells page (step 2) ----
 //
-// Not every spellcasting class needs a full "known spells" pick: Cleric,
-// Druid, and Paladin all *prepare* their leveled spells fresh each
+// Not every spellcasting class needs a full "known spells" pick: Artificer,
+// Cleric, Druid, and Paladin all *prepare* their leveled spells fresh each
 // day from their whole class list rather than permanently learning a fixed
 // set - but that still means picking WHICH ones are prepared right now
 // (2026-09-14: this used to auto-fill every single accessible spell as a
@@ -8956,34 +11361,38 @@ function buildItemWikilink(file) {
 // what's actually prepared for the day; see the "prepare" mode below and
 // preparedSpellsCapFor). Bard, Ranger, Sorcerer, Warlock, and Wizard
 // (spellbook) all have a genuinely fixed "spells known" / "spells in your
-// spellbook" list that has to start somewhere.
+// spellbook" list that has to start somewhere, and so do the two
+// spellcasting subclasses (Eldritch Knight, Arcane Trickster) on otherwise
+// non-casting classes.
 //
 // Cantrips are a separate wrinkle: unlike leveled spells, a preparing
 // class's cantrips ARE fixed once picked (not re-prepared every day) - so
-// Cleric/Druid (Paladin has no cantrips at all) get both a
+// Cleric/Druid/Artificer (Paladin has no cantrips at all) get both a
 // cantrip picker AND a leveled "prepared today" picker in the same section.
 const SPELLS_KNOWN_CLASSES = ["Bard", "Ranger", "Sorcerer", "Warlock", "Wizard"];
-const CANTRIP_CASTERS = ["Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard"];
+const CANTRIP_CASTERS = ["Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard", "Artificer"];
 // Casters that prepare their leveled spells from their whole class list
 // rather than choosing a fixed "known" subset. There's no per-spell class
 // tag in this vault (see getAllSpellNotes) to know exactly which notes
 // belong to which class's real list, so the picker offered to these
 // classes (see spellChoiceModeFor's "prepare" mode) is necessarily a
 // best-effort filtered list (SPELL_CLASS_LIST), not a rules-accurate one.
-const FULL_LIST_PREPARE_CLASSES = ["Cleric", "Druid", "Paladin"];
+const FULL_LIST_PREPARE_CLASSES = ["Cleric", "Druid", "Paladin", "Artificer"];
 
 // "known" - the wizard's Spells page shows a full cantrips+leveled picker
-//   for a permanently-learned list (Bard/Ranger/Sorcerer/Warlock/Wizard).
+//   for a permanently-learned list (Bard/Ranger/Sorcerer/Warlock/Wizard,
+//   and Eldritch Knight/Arcane Trickster's third-caster spell list).
 // "prepare" - the class re-prepares its leveled spells from its whole
 //   class list every Long Rest (FULL_LIST_PREPARE_CLASSES: Cleric, Druid,
-//   Paladin) - the wizard's Spells page still shows a picker,
+//   Paladin, Artificer) - the wizard's Spells page still shows a picker,
 //   just framed as "what's prepared right now" rather than "what's known
 //   forever", capped by preparedSpellsCapFor instead of spellsKnownCapFor.
-//   Cantrips (fixed once chosen) are offered alongside it for the two of
-//   these three that actually have any (Paladin doesn't).
+//   Cantrips (fixed once chosen) are offered alongside it for the three of
+//   these four that actually have any (Paladin doesn't).
 // null - genuinely nothing to choose here (a non-caster).
 function spellChoiceModeFor(className, subclassName) {
   if (SPELLS_KNOWN_CLASSES.includes(className)) return "known";
+  if (THIRD_CASTER_SUBCLASSES.includes(String(subclassName || "").toLowerCase())) return "known";
   if (FULL_LIST_PREPARE_CLASSES.includes(className)) return "prepare";
   return null;
 }
@@ -8992,40 +11401,88 @@ function classNeedsSpellChoice(className, subclassName) {
   return spellChoiceModeFor(className, subclassName) !== null;
 }
 
-// Which of the 12 SRD 5.2.1 classes' cantrip list each named cantrip
-// belongs to, cross-referenced directly against the SRD 5.2.1 text's own
-// per-spell class parenthetical (e.g. "Evocation Cantrip (Sorcerer,
-// Wizard)"). This is the full SRD cantrip list - nothing outside it is
-// listed here, and cantripAllowedForClass below trusts this table as
-// authoritative for SRD spells rather than leaving unlisted ones open.
+// Wires up "only one open at a time" accordion behavior for a group of
+// header/body pairs - used by the Spells page's per-spell-level pickers
+// (one card per level: Cantrips, 1st Level, 2nd Level, etc., styled like
+// the Create Character wizard's own Species/Class selection cards) in
+// both the Create Character and Update Character Sheet wizards. Clicking
+// a closed header closes whichever OTHER header in the same group is
+// currently open (if any) and opens this one instead; clicking the
+// currently-open header just closes it, same as any ordinary accordion.
+// Shared here (rather than duplicated per wizard, unlike most of this
+// file's wizard-only UI) since the open/close logic itself has no
+// dependency on either wizard's own state - only the per-level content
+// each header/body pair wraps differs between the two call sites.
+function wireSpellLevelAccordion(pairs) {
+  const setOpen = (pair, open) => {
+    pair.wrap.classList.toggle("is-open", open);
+    pair.body.style.display = open ? "" : "none";
+    pair.chevron.setText(open ? "⌄" : "›");
+  };
+  for (const pair of pairs) setOpen(pair, false);
+  for (const pair of pairs) {
+    pair.header.addEventListener("click", () => {
+      const willOpen = !pair.wrap.classList.contains("is-open");
+      for (const other of pairs) setOpen(other, other === pair && willOpen);
+    });
+    // Keyboard-accessible, same as any other clickable card in this wizard
+    // (the header has tabindex/role="button" - see its createEl call) -
+    // Enter/Space activates it just like a real <button> would.
+    pair.header.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter" || evt.key === " ") {
+        evt.preventDefault();
+        pair.header.click();
+      }
+    });
+  }
+}
+
+// Which classes' cantrip list each named cantrip actually belongs to, per
+// the 2024 PHB - added after testing showed Eldritch Blast (Warlock-only)
+// being offered to a new Artificer. Only covers cantrips that are on a
+// 2024 core class list; a name with no entry here (an older 2014/Tasha's-
+// era cantrip like Booming Blade or Sword Burst that the 2024 PHB folded
+// into other options, or a homebrew note) is left unfiltered rather than
+// hidden from everyone - see cantripAllowedForClass below. Artificer isn't
+// in the core 2024 PHB at all, so its entries here come from WotC's public
+// Artificer playtest material rather than the PHB itself - same "best-
+// effort, treat as a draft" caveat as the rest of this file's built-in
+// game data (SUBCLASS_LEVEL_FEATURES, STARTER_PACKS, etc.).
 const CANTRIP_CLASS_LIST = {
-  "Acid Splash": ["Sorcerer", "Wizard"],
-  "Chill Touch": ["Sorcerer", "Warlock", "Wizard"],
-  "Dancing Lights": ["Bard", "Sorcerer", "Wizard"],
+  "Acid Splash": ["Sorcerer", "Wizard", "Artificer"],
+  "Blade Ward": ["Bard", "Sorcerer", "Warlock", "Wizard"],
+  "Dancing Lights": ["Bard", "Sorcerer", "Wizard", "Artificer"],
   "Druidcraft": ["Druid"],
   "Eldritch Blast": ["Warlock"],
-  "Elementalism": ["Druid", "Sorcerer", "Wizard"],
-  "Fire Bolt": ["Sorcerer", "Wizard"],
-  "Guidance": ["Cleric", "Druid"],
-  "Light": ["Bard", "Cleric", "Sorcerer", "Wizard"],
-  "Mage Hand": ["Bard", "Sorcerer", "Warlock", "Wizard"],
-  "Mending": ["Bard", "Cleric", "Druid", "Sorcerer", "Wizard"],
-  "Message": ["Bard", "Druid", "Sorcerer", "Wizard"],
+  "Elementalism": ["Druid", "Sorcerer", "Wizard", "Artificer"],
+  "Fire Bolt": ["Sorcerer", "Wizard", "Artificer"],
+  "Friends": ["Bard", "Sorcerer", "Warlock", "Wizard"],
+  "Guidance": ["Cleric", "Druid", "Artificer"],
+  "Chill Touch": ["Sorcerer", "Warlock", "Wizard"],
+  "Light": ["Bard", "Cleric", "Sorcerer", "Wizard", "Artificer"],
+  "Mage Hand": ["Bard", "Sorcerer", "Warlock", "Wizard", "Artificer"],
+  "Mending": ["Bard", "Cleric", "Druid", "Sorcerer", "Wizard", "Artificer"],
+  "Message": ["Bard", "Druid", "Sorcerer", "Wizard", "Artificer"],
+  "Mind Sliver": ["Sorcerer", "Warlock", "Wizard"],
   "Minor Illusion": ["Bard", "Sorcerer", "Warlock", "Wizard"],
-  "Poison Spray": ["Druid", "Sorcerer", "Warlock", "Wizard"],
-  "Prestidigitation": ["Bard", "Sorcerer", "Warlock", "Wizard"],
+  "Poison Spray": ["Druid", "Sorcerer", "Warlock", "Wizard", "Artificer"],
+  "Prestidigitation": ["Bard", "Sorcerer", "Warlock", "Wizard", "Artificer"],
   "Produce Flame": ["Druid"],
-  "Ray of Frost": ["Sorcerer", "Wizard"],
-  "Resistance": ["Cleric", "Druid"],
+  "Ray of Frost": ["Sorcerer", "Wizard", "Artificer"],
+  "Resistance": ["Cleric", "Druid", "Artificer"],
   "Sacred Flame": ["Cleric"],
   "Shillelagh": ["Druid"],
-  "Shocking Grasp": ["Sorcerer", "Wizard"],
+  "Shocking Grasp": ["Sorcerer", "Wizard", "Artificer"],
   "Sorcerous Burst": ["Sorcerer"],
-  "Spare the Dying": ["Cleric", "Druid"],
+  "Spare the Dying": ["Cleric", "Druid", "Artificer"],
   "Starry Wisp": ["Bard", "Druid"],
   "Thaumaturgy": ["Cleric"],
-  "True Strike": ["Bard", "Sorcerer", "Warlock", "Wizard"],
+  "Thorn Whip": ["Druid", "Artificer"],
+  "Thunderclap": ["Bard", "Druid", "Sorcerer", "Warlock", "Wizard", "Artificer"],
+  "Toll the Dead": ["Cleric", "Warlock", "Wizard"],
+  "True Strike": ["Bard", "Sorcerer", "Warlock", "Wizard", "Artificer"],
   "Vicious Mockery": ["Bard"],
+  "Word of Radiance": ["Cleric"],
 };
 
 // True if `className` can actually learn a cantrip named `spellName`, per
@@ -9039,101 +11496,140 @@ function cantripAllowedForClass(spellName, className) {
 }
 
 // Same idea as CANTRIP_CLASS_LIST above, but for LEVELED spells (1st-9th) -
-// which of the 12 SRD 5.2.1 classes each named spell actually belongs to,
-// cross-referenced directly against the SRD 5.2.1 text's own per-spell
-// class parenthetical (e.g. "Level 2 Evocation (Wizard)"). This is the
-// full SRD leveled-spell list - what the "prepare" mode picker
-// (buildSpellsPage's accessible filter) narrows its leveled-spell options
-// down to, and what cantripAllowedForClass's sibling check for leveled
-// spells trusts as authoritative for SRD spells.
+// which class(es) each named spell actually belongs to per the 2024 PHB's
+// own per-class spell-list appendix (Artificer uses WotC's public
+// Artificer playtest material instead, same reasoning as its cantrips
+// above - it isn't in the core 2024 PHB). Added 2026-09-11 after a level 1
+// Artificer's auto-filled Spells reference (the wizard used to bulk-add
+// every accessible spell for FULL_LIST_PREPARE_CLASSES on creation, before
+// that was replaced on 2026-09-14 by the real "prepare for today" picker -
+// see spellChoiceModeFor's "prepare" mode) turned out to include every
+// #Spell note at that level with no class filtering at all. This table is
+// what the "prepare" mode picker (buildSpellsPage's accessible filter)
+// narrows its leveled-spell options down to - same "best-effort, treat as
+// a draft" caveat as the rest of this file's built-in game data applies
+// here too; a name with no entry (a homebrew note, or an older edition's
+// spell this vault still has tagged #Spell) is left unfiltered rather than
+// hidden from everyone, same as cantrips.
 const SPELL_CLASS_LIST = {
-  "Acid Arrow": ["Wizard"],
-  "Aid": ["Bard", "Cleric", "Druid", "Paladin", "Ranger"],
-  "Alarm": ["Ranger", "Wizard"],
-  "Alter Self": ["Sorcerer", "Wizard"],
+  "Aid": ["Bard", "Cleric", "Druid", "Paladin", "Ranger", "Artificer"],
+  "Alarm": ["Ranger", "Wizard", "Artificer"],
+  "Alter Self": ["Sorcerer", "Wizard", "Artificer"],
+  "Alustriel's Mooncloak": ["Bard", "Druid", "Ranger", "Wizard"],
   "Animal Friendship": ["Bard", "Druid", "Ranger"],
   "Animal Messenger": ["Bard", "Druid", "Ranger"],
   "Animal Shapes": ["Druid"],
   "Animate Dead": ["Cleric", "Wizard"],
-  "Animate Objects": ["Bard", "Sorcerer", "Wizard"],
+  "Animate Objects": ["Bard", "Sorcerer", "Wizard", "Artificer"],
   "Antilife Shell": ["Druid"],
   "Antimagic Field": ["Cleric", "Wizard"],
   "Antipathy/Sympathy": ["Bard", "Druid", "Wizard"],
-  "Arcane Eye": ["Wizard"],
-  "Arcane Hand": ["Sorcerer", "Wizard"],
-  "Arcane Lock": ["Wizard"],
-  "Arcane Sword": ["Bard", "Wizard"],
-  "Arcanist’s Magic Aura": ["Wizard"],
+  "Arcane Eye": ["Wizard", "Artificer"],
+  "Arcane Gate": ["Sorcerer", "Warlock", "Wizard"],
+  "Arcane Lock": ["Wizard", "Artificer"],
+  "Arcane Vigor": ["Sorcerer", "Wizard", "Artificer"],
+  "Armor of Agathys": ["Warlock"],
+  "Arms of Hadar": ["Warlock"],
+  "Astral Flood": ["Bard", "Cleric", "Sorcerer", "Warlock", "Wizard"],
   "Astral Projection": ["Cleric", "Warlock", "Wizard"],
   "Augury": ["Cleric", "Druid", "Wizard"],
+  "Aura of Evasion": ["Sorcerer", "Warlock", "Wizard"],
   "Aura of Life": ["Cleric", "Paladin"],
+  "Aura of Purity": ["Cleric", "Paladin"],
+  "Aura of Vitality": ["Cleric", "Druid", "Paladin"],
   "Awaken": ["Bard", "Druid"],
+  "Backlash": ["Bard", "Sorcerer", "Warlock", "Wizard"],
   "Bane": ["Bard", "Cleric", "Warlock"],
+  "Banishing Smite": ["Paladin"],
   "Banishment": ["Cleric", "Paladin", "Sorcerer", "Warlock", "Wizard"],
   "Barkskin": ["Druid", "Ranger"],
+  "Battle Familiar": ["Druid", "Warlock", "Wizard"],
   "Beacon of Hope": ["Cleric"],
+  "Beast Sense": ["Druid", "Ranger"],
   "Befuddlement": ["Bard", "Druid", "Warlock", "Wizard"],
   "Bestow Curse": ["Bard", "Cleric", "Wizard"],
-  "Black Tentacles": ["Wizard"],
+  "Bigby's Hand": ["Sorcerer", "Wizard", "Artificer"],
   "Blade Barrier": ["Cleric"],
+  "Blade of Disaster": ["Sorcerer", "Warlock", "Wizard"],
   "Bless": ["Cleric", "Paladin"],
   "Blight": ["Druid", "Sorcerer", "Warlock", "Wizard"],
+  "Blinding Smite": ["Paladin"],
   "Blindness/Deafness": ["Bard", "Cleric", "Sorcerer", "Wizard"],
-  "Blink": ["Sorcerer", "Wizard"],
-  "Blur": ["Sorcerer", "Wizard"],
+  "Blink": ["Sorcerer", "Wizard", "Artificer"],
+  "Blur": ["Sorcerer", "Wizard", "Artificer"],
   "Burning Hands": ["Sorcerer", "Wizard"],
+  "Buzzing Bee": ["Druid", "Ranger", "Sorcerer", "Wizard"],
+  "Cacophonic Shield": ["Bard", "Sorcerer", "Wizard"],
   "Call Lightning": ["Druid"],
   "Calm Emotions": ["Bard", "Cleric"],
+  "Catnap": ["Bard", "Sorcerer", "Wizard"],
   "Chain Lightning": ["Sorcerer", "Wizard"],
   "Charm Monster": ["Bard", "Druid", "Sorcerer", "Warlock", "Wizard"],
   "Charm Person": ["Bard", "Druid", "Sorcerer", "Warlock", "Wizard"],
   "Chromatic Orb": ["Sorcerer", "Wizard"],
   "Circle of Death": ["Sorcerer", "Warlock", "Wizard"],
+  "Circle of Power": ["Cleric", "Paladin", "Wizard", "Artificer"],
   "Clairvoyance": ["Bard", "Cleric", "Sorcerer", "Wizard"],
   "Clone": ["Wizard"],
+  "Cloud of Daggers": ["Bard", "Sorcerer", "Warlock", "Wizard"],
   "Cloudkill": ["Sorcerer", "Wizard"],
   "Color Spray": ["Bard", "Sorcerer", "Wizard"],
   "Command": ["Bard", "Cleric", "Paladin"],
   "Commune": ["Cleric"],
   "Commune with Nature": ["Druid", "Ranger"],
+  "Compelled Duel": ["Paladin"],
   "Comprehend Languages": ["Bard", "Sorcerer", "Warlock", "Wizard"],
   "Compulsion": ["Bard"],
   "Cone of Cold": ["Druid", "Sorcerer", "Wizard"],
   "Confusion": ["Bard", "Druid", "Sorcerer", "Wizard"],
   "Conjure Animals": ["Druid", "Ranger"],
+  "Conjure Barrage": ["Ranger"],
   "Conjure Celestial": ["Cleric"],
+  "Conjure Constructs": ["Wizard"],
   "Conjure Elemental": ["Druid", "Wizard"],
   "Conjure Fey": ["Druid"],
   "Conjure Minor Elementals": ["Druid", "Wizard"],
+  "Conjure Tools": ["Bard", "Ranger", "Wizard"],
+  "Conjure Volley": ["Ranger"],
   "Conjure Woodland Beings": ["Druid", "Ranger"],
   "Contact Other Plane": ["Warlock", "Wizard"],
   "Contagion": ["Cleric", "Druid"],
   "Contingency": ["Wizard"],
-  "Continual Flame": ["Cleric", "Druid", "Wizard"],
+  "Continual Flame": ["Cleric", "Druid", "Wizard", "Artificer"],
   "Control Water": ["Cleric", "Druid", "Wizard"],
   "Control Weather": ["Cleric", "Druid", "Wizard"],
+  "Cordon of Arrows": ["Ranger"],
   "Counterspell": ["Sorcerer", "Warlock", "Wizard"],
-  "Create Food and Water": ["Cleric", "Paladin"],
-  "Create Undead": ["Cleric", "Warlock", "Wizard"],
+  "Create Food and Water": ["Cleric", "Paladin", "Artificer"],
   "Create or Destroy Water": ["Cleric", "Druid"],
-  "Creation": ["Sorcerer", "Wizard"],
-  "Cure Wounds": ["Bard", "Cleric", "Druid", "Paladin", "Ranger"],
+  "Create Undead": ["Cleric", "Warlock", "Wizard"],
+  "Creation": ["Sorcerer", "Wizard", "Artificer"],
+  "Crown of Madness": ["Bard", "Sorcerer", "Warlock", "Wizard"],
+  "Crusader's Mantle": ["Paladin"],
+  "Cure Wounds": ["Bard", "Cleric", "Druid", "Paladin", "Ranger", "Artificer"],
   "Darkness": ["Sorcerer", "Warlock", "Wizard"],
-  "Darkvision": ["Druid", "Ranger", "Sorcerer", "Wizard"],
+  "Darkvision": ["Druid", "Ranger", "Sorcerer", "Wizard", "Artificer"],
   "Daylight": ["Cleric", "Druid", "Paladin", "Ranger", "Sorcerer"],
+  "Death Armor": ["Sorcerer", "Wizard"],
   "Death Ward": ["Cleric", "Paladin"],
   "Delayed Blast Fireball": ["Sorcerer", "Wizard"],
   "Demiplane": ["Sorcerer", "Warlock", "Wizard"],
+  "Deryan's Helpful Homunculi": ["Cleric", "Wizard"],
+  "Destructive Wave": ["Paladin"],
   "Detect Evil and Good": ["Cleric", "Paladin"],
-  "Detect Magic": ["Bard", "Cleric", "Druid", "Paladin", "Ranger", "Sorcerer", "Warlock", "Wizard"],
+  "Detect Magic": ["Bard", "Cleric", "Druid", "Paladin", "Ranger", "Sorcerer", "Warlock", "Wizard", "Artificer"],
   "Detect Poison and Disease": ["Cleric", "Druid", "Paladin", "Ranger"],
   "Detect Thoughts": ["Bard", "Sorcerer", "Wizard"],
+  "Detonate": ["Sorcerer", "Warlock", "Wizard"],
   "Dimension Door": ["Bard", "Sorcerer", "Warlock", "Wizard"],
-  "Disguise Self": ["Bard", "Sorcerer", "Wizard"],
+  "Dirge": ["Bard", "Cleric"],
+  "Disguise Self": ["Bard", "Sorcerer", "Wizard", "Artificer"],
   "Disintegrate": ["Sorcerer", "Wizard"],
   "Dispel Evil and Good": ["Cleric", "Paladin"],
-  "Dispel Magic": ["Bard", "Cleric", "Druid", "Paladin", "Ranger", "Sorcerer", "Warlock", "Wizard"],
+  "Dispel Magic": ["Bard", "Cleric", "Druid", "Paladin", "Ranger", "Sorcerer", "Warlock", "Wizard", "Artificer"],
+  "Disruptive Tune": ["Bard", "Sorcerer", "Wizard"],
   "Dissonant Whispers": ["Bard"],
+  "Distorted Distance": ["Bard", "Warlock", "Wizard"],
   "Divination": ["Cleric", "Druid", "Wizard"],
   "Divine Favor": ["Paladin"],
   "Divine Smite": ["Paladin"],
@@ -9141,27 +11637,38 @@ const SPELL_CLASS_LIST = {
   "Dominate Beast": ["Druid", "Ranger", "Sorcerer"],
   "Dominate Monster": ["Bard", "Sorcerer", "Warlock", "Wizard"],
   "Dominate Person": ["Bard", "Sorcerer", "Wizard"],
-  "Dragon’s Breath": ["Sorcerer", "Wizard"],
+  "Doomtide": ["Bard", "Cleric", "Warlock"],
+  "Dragon's Breath": ["Sorcerer", "Wizard", "Artificer"],
+  "Drawmij's Instant Summons": ["Wizard"],
   "Dream": ["Bard", "Warlock", "Wizard"],
+  "Dueling Ground": ["Bard", "Cleric", "Druid", "Paladin", "Ranger", "Sorcerer", "Warlock", "Wizard"],
   "Earthquake": ["Cleric", "Druid", "Sorcerer"],
-  "Enhance Ability": ["Bard", "Cleric", "Druid", "Ranger", "Sorcerer", "Wizard"],
-  "Enlarge/Reduce": ["Bard", "Druid", "Sorcerer", "Wizard"],
+  "Elemental Weapon": ["Druid", "Paladin", "Ranger", "Artificer"],
+  "Elminster's Effulgent Spheres": ["Druid", "Sorcerer", "Wizard"],
+  "Elminster's Elusion": ["Wizard"],
+  "Enervation": ["Sorcerer", "Warlock", "Wizard"],
+  "Enhance Ability": ["Bard", "Cleric", "Druid", "Ranger", "Sorcerer", "Wizard", "Artificer"],
+  "Enlarge/Reduce": ["Bard", "Druid", "Sorcerer", "Wizard", "Artificer"],
   "Ensnaring Strike": ["Ranger"],
   "Entangle": ["Druid", "Ranger"],
   "Enthrall": ["Bard", "Warlock"],
+  "Entrancing Mirrors": ["Bard", "Sorcerer", "Warlock", "Wizard"],
   "Etherealness": ["Bard", "Cleric", "Sorcerer", "Warlock", "Wizard"],
-  "Expeditious Retreat": ["Sorcerer", "Warlock", "Wizard"],
+  "Evard's Black Tentacles": ["Wizard"],
+  "Expeditious Retreat": ["Sorcerer", "Warlock", "Wizard", "Artificer"],
   "Eyebite": ["Bard", "Sorcerer", "Warlock", "Wizard"],
-  "Fabricate": ["Wizard"],
-  "Faerie Fire": ["Bard", "Druid"],
-  "Faithful Hound": ["Wizard"],
-  "False Life": ["Sorcerer", "Wizard"],
+  "Fabricate": ["Wizard", "Artificer"],
+  "Faerie Fire": ["Bard", "Druid", "Artificer"],
+  "False Life": ["Sorcerer", "Wizard", "Artificer"],
   "Fear": ["Bard", "Sorcerer", "Warlock", "Wizard"],
-  "Feather Fall": ["Bard", "Sorcerer", "Wizard"],
+  "Feather Fall": ["Bard", "Sorcerer", "Wizard", "Artificer"],
+  "Feign Death": ["Bard", "Cleric", "Druid", "Wizard"],
+  "Feign Interest": ["Wizard"],
+  "Festering Blast": ["Druid", "Sorcerer", "Warlock", "Wizard"],
   "Find Familiar": ["Wizard"],
   "Find Steed": ["Paladin"],
-  "Find Traps": ["Cleric", "Druid", "Ranger"],
   "Find the Path": ["Bard", "Cleric", "Druid"],
+  "Find Traps": ["Cleric", "Druid", "Ranger"],
   "Finger of Death": ["Sorcerer", "Warlock", "Wizard"],
   "Fire Shield": ["Druid", "Sorcerer", "Wizard"],
   "Fire Storm": ["Cleric", "Druid", "Sorcerer"],
@@ -9170,14 +11677,14 @@ const SPELL_CLASS_LIST = {
   "Flame Strike": ["Cleric"],
   "Flaming Sphere": ["Druid", "Sorcerer", "Wizard"],
   "Flesh to Stone": ["Druid", "Sorcerer", "Wizard"],
-  "Floating Disk": ["Wizard"],
-  "Fly": ["Sorcerer", "Warlock", "Wizard"],
+  "Fly": ["Sorcerer", "Warlock", "Wizard", "Artificer"],
   "Fog Cloud": ["Druid", "Ranger", "Sorcerer", "Wizard"],
   "Forbiddance": ["Cleric"],
   "Forcecage": ["Bard", "Warlock", "Wizard"],
   "Foresight": ["Bard", "Druid", "Warlock", "Wizard"],
-  "Freedom of Movement": ["Bard", "Cleric", "Druid", "Ranger"],
-  "Freezing Sphere": ["Sorcerer", "Wizard"],
+  "Fount of Moonlight": ["Bard", "Druid"],
+  "Fractured Awareness": ["Bard", "Sorcerer", "Warlock", "Wizard"],
+  "Freedom of Movement": ["Bard", "Cleric", "Druid", "Ranger", "Artificer"],
   "Gaseous Form": ["Sorcerer", "Warlock", "Wizard"],
   "Gate": ["Cleric", "Sorcerer", "Warlock", "Wizard"],
   "Geas": ["Bard", "Cleric", "Druid", "Paladin", "Wizard"],
@@ -9185,60 +11692,75 @@ const SPELL_CLASS_LIST = {
   "Giant Insect": ["Druid"],
   "Glibness": ["Bard", "Warlock"],
   "Globe of Invulnerability": ["Sorcerer", "Wizard"],
-  "Glyph of Warding": ["Bard", "Cleric", "Wizard"],
+  "Glyph of Warding": ["Bard", "Cleric", "Wizard", "Artificer"],
   "Goodberry": ["Druid", "Ranger"],
-  "Grease": ["Sorcerer", "Wizard"],
+  "Grasping Vine": ["Druid", "Ranger"],
+  "Grave Ground": ["Cleric", "Warlock", "Wizard"],
+  "Grease": ["Sorcerer", "Wizard", "Artificer"],
   "Greater Invisibility": ["Bard", "Sorcerer", "Wizard"],
-  "Greater Restoration": ["Bard", "Cleric", "Druid", "Paladin", "Ranger"],
+  "Greater Restoration": ["Bard", "Cleric", "Druid", "Paladin", "Ranger", "Artificer"],
   "Guardian of Faith": ["Cleric"],
   "Guards and Wards": ["Bard", "Wizard"],
   "Guiding Bolt": ["Cleric"],
   "Gust of Wind": ["Druid", "Ranger", "Sorcerer", "Wizard"],
+  "Hail of Thorns": ["Ranger"],
   "Hallow": ["Cleric"],
   "Hallucinatory Terrain": ["Bard", "Druid", "Warlock", "Wizard"],
   "Harm": ["Cleric"],
-  "Haste": ["Sorcerer", "Wizard"],
+  "Haste": ["Sorcerer", "Wizard", "Artificer"],
   "Heal": ["Cleric", "Druid"],
   "Healing Word": ["Bard", "Cleric", "Druid"],
-  "Heat Metal": ["Bard", "Druid"],
+  "Heat Metal": ["Bard", "Druid", "Artificer"],
   "Hellish Rebuke": ["Warlock"],
-  "Heroes’ Feast": ["Bard", "Cleric", "Druid"],
+  "Heroes' Feast": ["Bard", "Cleric", "Druid"],
   "Heroism": ["Bard", "Paladin"],
   "Hex": ["Warlock"],
-  "Hideous Laughter": ["Bard", "Warlock", "Wizard"],
+  "Hindsight": ["Wizard"],
   "Hold Monster": ["Bard", "Sorcerer", "Warlock", "Wizard"],
   "Hold Person": ["Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard"],
   "Holy Aura": ["Cleric"],
-  "Hunter’s Mark": ["Ranger"],
+  "Holy Star of Mystra": ["Cleric", "Wizard"],
+  "Homunculus Servant": ["Artificer"],
+  "Hunger of Hadar": ["Warlock"],
+  "Hunter's Mark": ["Ranger"],
   "Hypnotic Pattern": ["Bard", "Sorcerer", "Warlock", "Wizard"],
   "Ice Knife": ["Druid", "Sorcerer", "Wizard"],
   "Ice Storm": ["Druid", "Sorcerer", "Wizard"],
-  "Identify": ["Bard", "Wizard"],
+  "Identify": ["Bard", "Wizard", "Artificer"],
+  "Illusory Dragon": ["Wizard"],
   "Illusory Script": ["Bard", "Warlock", "Wizard"],
   "Imprisonment": ["Warlock", "Wizard"],
   "Incendiary Cloud": ["Druid", "Sorcerer", "Wizard"],
+  "Inflict Doubt": ["Bard", "Sorcerer", "Warlock", "Wizard"],
   "Inflict Wounds": ["Cleric"],
   "Insect Plague": ["Cleric", "Druid", "Sorcerer"],
-  "Instant Summons": ["Wizard"],
-  "Invisibility": ["Bard", "Sorcerer", "Warlock", "Wizard"],
-  "Irresistible Dance": ["Bard", "Wizard"],
-  "Jump": ["Druid", "Ranger", "Sorcerer", "Wizard"],
+  "Insidious Rhythm": ["Bard"],
+  "Invisibility": ["Bard", "Sorcerer", "Warlock", "Wizard", "Artificer"],
+  "Invulnerability": ["Wizard"],
+  "Iron Body": ["Sorcerer", "Warlock", "Wizard"],
+  "Jallarzi's Storm of Radiance": ["Warlock", "Wizard"],
+  "Jump": ["Druid", "Ranger", "Sorcerer", "Wizard", "Artificer"],
   "Knock": ["Bard", "Sorcerer", "Wizard"],
+  "Laeral's Silver Lance": ["Cleric", "Sorcerer", "Wizard"],
   "Legend Lore": ["Bard", "Cleric", "Wizard"],
-  "Lesser Restoration": ["Bard", "Cleric", "Druid", "Paladin", "Ranger"],
-  "Levitate": ["Sorcerer", "Wizard"],
+  "Leomund's Lamentable Belaborment": ["Bard", "Sorcerer", "Wizard"],
+  "Leomund's Secret Chest": ["Wizard", "Artificer"],
+  "Leomund's Tiny Hut": ["Bard", "Wizard"],
+  "Lesser Restoration": ["Bard", "Cleric", "Druid", "Paladin", "Ranger", "Artificer"],
+  "Levitate": ["Sorcerer", "Wizard", "Artificer"],
+  "Lightning Arrow": ["Ranger"],
   "Lightning Bolt": ["Sorcerer", "Wizard"],
+  "Lightning Ring": ["Druid", "Sorcerer", "Warlock", "Wizard"],
   "Locate Animals or Plants": ["Bard", "Druid", "Ranger"],
   "Locate Creature": ["Bard", "Cleric", "Druid", "Paladin", "Ranger", "Wizard"],
   "Locate Object": ["Bard", "Cleric", "Druid", "Paladin", "Ranger", "Wizard"],
-  "Longstrider": ["Bard", "Druid", "Ranger", "Wizard"],
+  "Longstrider": ["Bard", "Druid", "Ranger", "Wizard", "Artificer"],
   "Mage Armor": ["Sorcerer", "Wizard"],
   "Magic Circle": ["Cleric", "Paladin", "Warlock", "Wizard"],
   "Magic Jar": ["Wizard"],
   "Magic Missile": ["Sorcerer", "Wizard"],
-  "Magic Mouth": ["Bard", "Wizard"],
-  "Magic Weapon": ["Paladin", "Ranger", "Sorcerer", "Wizard"],
-  "Magnificent Mansion": ["Bard", "Wizard"],
+  "Magic Mouth": ["Bard", "Wizard", "Artificer"],
+  "Magic Weapon": ["Paladin", "Ranger", "Sorcerer", "Wizard", "Artificer"],
   "Major Image": ["Bard", "Sorcerer", "Warlock", "Wizard"],
   "Mass Cure Wounds": ["Bard", "Cleric", "Druid"],
   "Mass Heal": ["Cleric"],
@@ -9246,6 +11768,7 @@ const SPELL_CLASS_LIST = {
   "Mass Suggestion": ["Bard", "Sorcerer", "Wizard"],
   "Maze": ["Wizard"],
   "Meld into Stone": ["Cleric", "Druid", "Ranger"],
+  "Melf's Acid Arrow": ["Wizard"],
   "Meteor Swarm": ["Sorcerer", "Wizard"],
   "Mind Blank": ["Bard", "Wizard"],
   "Mind Spike": ["Sorcerer", "Warlock", "Wizard"],
@@ -9254,49 +11777,64 @@ const SPELL_CLASS_LIST = {
   "Mislead": ["Bard", "Warlock", "Wizard"],
   "Misty Step": ["Sorcerer", "Warlock", "Wizard"],
   "Modify Memory": ["Bard", "Wizard"],
+  "Moment of Prescience": ["Wizard"],
   "Moonbeam": ["Druid"],
+  "Mordenkainen's Faithful Hound": ["Wizard", "Artificer"],
+  "Mordenkainen's Lucubration": ["Wizard"],
+  "Mordenkainen's Magnificent Mansion": ["Bard", "Wizard"],
+  "Mordenkainen's Private Sanctum": ["Wizard", "Artificer"],
+  "Mordenkainen's Sword": ["Bard", "Wizard"],
   "Move Earth": ["Druid", "Sorcerer", "Wizard"],
+  "Negative Energy Flood": ["Warlock", "Wizard"],
   "Nondetection": ["Bard", "Ranger", "Wizard"],
+  "Nystul's Magic Aura": ["Wizard"],
+  "Otiluke's Freezing Sphere": ["Sorcerer", "Wizard"],
+  "Otiluke's Resilient Sphere": ["Wizard", "Artificer"],
+  "Otto's Irresistible Dance": ["Bard", "Wizard"],
   "Pass without Trace": ["Druid", "Ranger"],
   "Passwall": ["Wizard"],
   "Phantasmal Force": ["Bard", "Sorcerer", "Wizard"],
   "Phantasmal Killer": ["Bard", "Wizard"],
   "Phantom Steed": ["Wizard"],
+  "Pinky Swear": ["Bard", "Paladin", "Wizard"],
   "Planar Ally": ["Cleric"],
   "Planar Binding": ["Bard", "Cleric", "Druid", "Warlock", "Wizard"],
   "Plane Shift": ["Cleric", "Druid", "Sorcerer", "Warlock", "Wizard"],
   "Plant Growth": ["Bard", "Druid", "Ranger"],
   "Polymorph": ["Bard", "Druid", "Sorcerer", "Wizard"],
+  "Power Word Fortify": ["Bard", "Cleric"],
   "Power Word Heal": ["Bard", "Cleric"],
   "Power Word Kill": ["Bard", "Sorcerer", "Warlock", "Wizard"],
+  "Power Word Pain": ["Bard", "Sorcerer", "Warlock", "Wizard"],
   "Power Word Stun": ["Bard", "Sorcerer", "Warlock", "Wizard"],
   "Prayer of Healing": ["Cleric", "Paladin"],
   "Prismatic Spray": ["Bard", "Sorcerer", "Wizard"],
   "Prismatic Wall": ["Bard", "Wizard"],
-  "Private Sanctum": ["Wizard"],
   "Programmed Illusion": ["Bard", "Wizard"],
   "Project Image": ["Bard", "Wizard"],
-  "Protection from Energy": ["Cleric", "Druid", "Ranger", "Sorcerer", "Wizard"],
+  "Protection from Energy": ["Cleric", "Druid", "Ranger", "Sorcerer", "Wizard", "Artificer"],
   "Protection from Evil and Good": ["Cleric", "Druid", "Paladin", "Warlock", "Wizard"],
-  "Protection from Poison": ["Cleric", "Druid", "Paladin", "Ranger"],
-  "Purify Food and Drink": ["Cleric", "Druid", "Paladin"],
+  "Protection from Poison": ["Cleric", "Druid", "Paladin", "Ranger", "Artificer"],
+  "Purify Food and Drink": ["Cleric", "Druid", "Paladin", "Artificer"],
+  "Quick Clothier": ["Bard", "Wizard"],
   "Raise Dead": ["Bard", "Cleric", "Paladin"],
+  "Rary's Telepathic Bond": ["Bard", "Wizard"],
   "Ray of Enfeeblement": ["Warlock", "Wizard"],
   "Ray of Sickness": ["Sorcerer", "Wizard"],
   "Regenerate": ["Bard", "Cleric", "Druid"],
   "Reincarnate": ["Druid"],
   "Remove Curse": ["Cleric", "Paladin", "Warlock", "Wizard"],
-  "Resilient Sphere": ["Wizard"],
   "Resurrection": ["Bard", "Cleric"],
   "Reverse Gravity": ["Druid", "Sorcerer", "Wizard"],
-  "Revivify": ["Cleric", "Druid", "Paladin", "Ranger"],
-  "Rope Trick": ["Wizard"],
-  "Sanctuary": ["Cleric"],
+  "Revivify": ["Cleric", "Druid", "Paladin", "Ranger", "Artificer"],
+  "Reweave Fate": ["Bard", "Cleric", "Warlock", "Wizard"],
+  "Rope Trick": ["Wizard", "Artificer"],
+  "Sanctuary": ["Cleric", "Artificer"],
   "Scorching Ray": ["Sorcerer", "Wizard"],
   "Scrying": ["Bard", "Cleric", "Druid", "Warlock", "Wizard"],
+  "Searing Orb": ["Cleric", "Paladin"],
   "Searing Smite": ["Paladin"],
-  "Secret Chest": ["Wizard"],
-  "See Invisibility": ["Bard", "Sorcerer", "Wizard"],
+  "See Invisibility": ["Bard", "Sorcerer", "Wizard", "Artificer"],
   "Seeming": ["Bard", "Sorcerer", "Wizard"],
   "Sending": ["Bard", "Cleric", "Wizard"],
   "Sequester": ["Wizard"],
@@ -9307,57 +11845,94 @@ const SPELL_CLASS_LIST = {
   "Shining Smite": ["Paladin"],
   "Silence": ["Bard", "Cleric", "Ranger"],
   "Silent Image": ["Bard", "Sorcerer", "Wizard"],
+  "Simbul's Synostodweomer": ["Sorcerer", "Wizard"],
   "Simulacrum": ["Wizard"],
   "Sleep": ["Bard", "Sorcerer", "Wizard"],
   "Sleet Storm": ["Druid", "Sorcerer", "Wizard"],
   "Slow": ["Bard", "Sorcerer", "Wizard"],
+  "Songal's Elemental Suffusion": ["Druid", "Sorcerer", "Wizard"],
   "Speak with Animals": ["Bard", "Druid", "Ranger", "Warlock"],
   "Speak with Dead": ["Bard", "Cleric", "Wizard"],
   "Speak with Plants": ["Bard", "Druid", "Ranger"],
-  "Spider Climb": ["Sorcerer", "Warlock", "Wizard"],
+  "Spellfire Flare": ["Sorcerer", "Wizard"],
+  "Spellfire Storm": ["Sorcerer", "Wizard"],
+  "Spider Climb": ["Sorcerer", "Warlock", "Wizard", "Artificer"],
   "Spike Growth": ["Druid", "Ranger"],
   "Spirit Guardians": ["Cleric"],
+  "Spirit Lantern": ["Cleric", "Warlock", "Wizard"],
   "Spiritual Weapon": ["Cleric"],
+  "Staggering Smite": ["Paladin"],
+  "Steel Wind Strike": ["Ranger", "Wizard"],
+  "Sticks to Snakes": ["Cleric", "Druid", "Ranger"],
   "Stinking Cloud": ["Bard", "Sorcerer", "Wizard"],
-  "Stone Shape": ["Cleric", "Druid", "Wizard"],
-  "Stoneskin": ["Druid", "Ranger", "Sorcerer", "Wizard"],
+  "Stone Shape": ["Cleric", "Druid", "Wizard", "Artificer"],
+  "Stoneskin": ["Druid", "Ranger", "Sorcerer", "Wizard", "Artificer"],
   "Storm of Vengeance": ["Druid"],
   "Suggestion": ["Bard", "Sorcerer", "Warlock", "Wizard"],
+  "Summon Aberration": ["Warlock", "Wizard"],
+  "Summon Beast": ["Druid", "Ranger"],
+  "Summon Celestial": ["Cleric", "Paladin"],
+  "Summon Construct": ["Wizard", "Artificer"],
+  "Summon Dinosaur": ["Druid"],
   "Summon Dragon": ["Wizard"],
+  "Summon Elemental": ["Druid", "Ranger", "Wizard"],
+  "Summon Fey": ["Druid", "Ranger", "Warlock", "Wizard"],
+  "Summon Fiend": ["Warlock", "Wizard"],
+  "Summon Plant": ["Druid", "Ranger"],
+  "Summon Undead": ["Warlock", "Wizard"],
   "Sunbeam": ["Cleric", "Druid", "Sorcerer", "Wizard"],
   "Sunburst": ["Cleric", "Druid", "Sorcerer", "Wizard"],
+  "Swift Quiver": ["Ranger"],
+  "Sylune's Viper": ["Druid", "Wizard"],
   "Symbol": ["Bard", "Cleric", "Druid", "Wizard"],
+  "Synaptic Static": ["Bard", "Sorcerer", "Warlock", "Wizard"],
+  "Tasha's Bubbling Cauldron": ["Warlock", "Wizard"],
+  "Tasha's Hideous Laughter": ["Bard", "Warlock", "Wizard"],
   "Telekinesis": ["Sorcerer", "Wizard"],
-  "Telepathic Bond": ["Bard", "Wizard"],
+  "Telepathy": ["Wizard"],
   "Teleport": ["Bard", "Sorcerer", "Wizard"],
   "Teleportation Circle": ["Bard", "Sorcerer", "Warlock", "Wizard"],
+  "Tenser's Floating Disk": ["Wizard"],
+  "Thunderous Smite": ["Paladin"],
   "Thunderwave": ["Bard", "Druid", "Sorcerer", "Wizard"],
   "Time Stop": ["Sorcerer", "Wizard"],
-  "Tiny Hut": ["Bard", "Wizard"],
   "Tongues": ["Bard", "Cleric", "Sorcerer", "Warlock", "Wizard"],
+  "Tortoise Shell": ["Druid", "Ranger"],
+  "Transfix": ["Bard", "Warlock", "Wizard"],
   "Transport via Plants": ["Druid"],
   "Tree Stride": ["Druid", "Ranger"],
   "True Polymorph": ["Bard", "Warlock", "Wizard"],
   "True Resurrection": ["Cleric", "Druid"],
   "True Seeing": ["Bard", "Cleric", "Sorcerer", "Warlock", "Wizard"],
   "Tsunami": ["Druid"],
+  "Uncertain Footing": ["Bard", "Warlock", "Wizard"],
   "Unseen Servant": ["Bard", "Warlock", "Wizard"],
   "Vampiric Touch": ["Sorcerer", "Warlock", "Wizard"],
+  "Vision of Elapsing Eons": ["Bard", "Sorcerer", "Warlock", "Wizard"],
   "Vitriolic Sphere": ["Sorcerer", "Wizard"],
+  "Void Star": ["Warlock", "Wizard"],
+  "Wail of the Banshee": ["Sorcerer", "Warlock", "Wizard"],
   "Wall of Fire": ["Druid", "Sorcerer", "Wizard"],
   "Wall of Force": ["Wizard"],
   "Wall of Ice": ["Wizard"],
-  "Wall of Stone": ["Druid", "Sorcerer", "Wizard"],
+  "Wall of Stone": ["Druid", "Sorcerer", "Wizard", "Artificer"],
   "Wall of Thorns": ["Druid"],
+  "Wardaway": ["Bard", "Cleric", "Paladin", "Wizard"],
   "Warding Bond": ["Cleric", "Paladin"],
-  "Water Breathing": ["Druid", "Ranger", "Sorcerer", "Wizard"],
-  "Water Walk": ["Cleric", "Druid", "Ranger", "Sorcerer"],
-  "Web": ["Sorcerer", "Wizard"],
+  "Water Breathing": ["Druid", "Ranger", "Sorcerer", "Wizard", "Artificer"],
+  "Water Walk": ["Cleric", "Druid", "Ranger", "Sorcerer", "Artificer"],
+  "Waves of Exhaustion": ["Sorcerer", "Warlock", "Wizard"],
+  "Web": ["Sorcerer", "Wizard", "Artificer"],
   "Weird": ["Warlock", "Wizard"],
   "Wind Walk": ["Druid"],
   "Wind Wall": ["Druid", "Ranger"],
   "Wish": ["Sorcerer", "Wizard"],
+  "Witch Bolt": ["Sorcerer", "Warlock", "Wizard"],
+  "Wither and Bloom": ["Druid", "Sorcerer", "Wizard"],
   "Word of Recall": ["Cleric"],
+  "Wrathful Smite": ["Paladin"],
+  "Yolande's Regal Presence": ["Bard", "Wizard"],
+  "Zone of Amicability": ["Bard", "Warlock"],
   "Zone of Truth": ["Bard", "Cleric", "Paladin"],
 };
 // True if `className` can actually learn/prepare the LEVELED spell named
@@ -9389,7 +11964,10 @@ function spellAllowedForClass(spellName, className) {
 // picker an accurate cap instead of none, rather than reclassifying Ranger
 // entirely. Wizard's entry is its "Spells in Spellbook" cumulative total
 // (6 at level 1, +2/level) - a different mechanic, but serves the same
-// "how many can be selected here" purpose for this picker.
+// "how many can be selected here" purpose for this picker. Eldritch
+// Knight/Arcane Trickster (third casters) have no entry - their spells-
+// known progression comes from their base non-caster class and wasn't
+// researched for this pass, so their picker keeps the old no-cap behavior.
 const SPELLS_KNOWN_TABLE = {
   bard: [4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 16, 17, 17, 18, 18, 19, 20, 21, 22],
   ranger: [2, 3, 4, 5, 6, 6, 7, 7, 9, 9, 10, 10, 11, 11, 12, 12, 14, 14, 15, 15],
@@ -9411,14 +11989,18 @@ function spellsKnownCapFor(className, classLevel) {
 }
 
 // Fixed "Cantrips Known" count by character level, for every class in
-// CANTRIP_CASTERS (Bard/Cleric/Druid/Sorcerer/Warlock/Wizard) -
+// CANTRIP_CASTERS (Bard/Cleric/Druid/Sorcerer/Warlock/Wizard/Artificer) -
 // 2026-09-23, added per the user's own request ("the cantrips should be
 // capped, there should be certain amount character can have at certain
 // class or level"). Unlike SPELLS_KNOWN_TABLE, this applies to a
-// "prepare"-mode class (Cleric/Druid) too - cantrips known is
+// "prepare"-mode class (Cleric/Druid/Artificer) too - cantrips known is
 // always a fixed, permanently-learned count in the 2024 rules, independent
 // of whichever leveled spells that class re-prepares each Long Rest.
-// Index 0 = character level 1.
+// Index 0 = character level 1. Eldritch Knight/Arcane Trickster (third
+// casters) aren't here - they get a flat 2 Wizard cantrips with no further
+// scaling by level, handled as a special case wherever this table is
+// consulted rather than listed here (same convention THIRD_CASTER_SUBCLASSES
+// already uses elsewhere in this file).
 const CANTRIPS_KNOWN_TABLE = {
   bard: [2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
   cleric: [3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
@@ -9426,14 +12008,22 @@ const CANTRIPS_KNOWN_TABLE = {
   sorcerer: [4, 4, 4, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6],
   warlock: [2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4],
   wizard: [3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+  artificer: [2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4],
 };
+// Fixed cantrip count for a third caster (Eldritch Knight/Arcane Trickster)
+// - never scales with level, unlike every real caster's own table above.
+const THIRD_CASTER_CANTRIPS_KNOWN = 2;
 
 // Cap on how many CANTRIPS `className` can have selected at `classLevel` -
-// the cantrip-side counterpart to spellsKnownCapFor above. Returns
+// the cantrip-side counterpart to spellsKnownCapFor above. `isThirdCaster`
+// (already computed by every caller, same as spellsKnownCapFor's own
+// third-caster handling) short-circuits to the flat, non-scaling
+// THIRD_CASTER_CANTRIPS_KNOWN instead of consulting the table. Returns
 // null when there's no table for this class (i.e. it can't have cantrips
 // at all), meaning "no cap enforced" - callers should also just never show
 // cantrip options at all in that case (see canHaveCantrips).
-function cantripsKnownCapFor(className, classLevel) {
+function cantripsKnownCapFor(className, classLevel, isThirdCaster) {
+  if (isThirdCaster) return THIRD_CASTER_CANTRIPS_KNOWN;
   const table = CANTRIPS_KNOWN_TABLE[String(className || "").toLowerCase()];
   if (!table) return null;
   const idx = Math.min(Math.max(Number(classLevel) || 1, 1), table.length) - 1;
@@ -9441,13 +12031,14 @@ function cantripsKnownCapFor(className, classLevel) {
 }
 
 // Real 2024 PHB "spells prepared" formula for the FULL_LIST_PREPARE_CLASSES
-// (Cleric, Druid, Paladin): spellcasting-ability modifier plus
+// (Cleric, Druid, Paladin, Artificer): spellcasting-ability modifier plus
 // class level for a full caster (Cleric/Druid), or plus HALF that class's
-// own level rounded down for a half caster (Paladin) - minimum
+// own level rounded down for a half caster (Paladin) or Artificer (which
+// uses the same halved-level formula under Tasha's/2024 rules) - minimum
 // of 1 spell either way. Reuses this file's existing CLASS_PROGRESSION
 // full/half categorization (already kept for spell-slot tables) rather
 // than a second hand-typed table, since the two line up exactly for these
-// three classes. This is the "prepare" mode's equivalent of
+// four classes. This is the "prepare" mode's equivalent of
 // spellsKnownCapFor above - unlike that one, it's never null (every
 // class/level/ability-mod combo produces a real cap, per the actual rule).
 function preparedSpellsCapFor(className, classLevel, abilityMod) {
@@ -9462,7 +12053,9 @@ function preparedSpellsCapFor(className, classLevel, abilityMod) {
 // Returns 0 if the class isn't a caster, or hasn't reached a slot yet.
 function maxSpellLevelFor(className, subclassName, level, edition) {
   const key = className.toLowerCase();
-  const type = CLASS_PROGRESSION[key] || null;
+  const type =
+    CLASS_PROGRESSION[key] ||
+    (THIRD_CASTER_SUBCLASSES.includes(String(subclassName || "").toLowerCase()) ? "third" : null);
   if (!type) return 0;
   const tableKey = type === "half" ? `half_${edition}` : type;
   const table = (SPELL_SLOT_TABLES[tableKey] || {})[String(level)] || {};
@@ -9930,7 +12523,8 @@ class InitiativeTracker extends MarkdownRenderChild {
 // `page` is a flat object of current/default values; returns every input
 // reference the caller's Save handler needs to read back.
 function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
-  const RACE_OPTIONS = ["Dragonborn","Dwarf","Elf","Gnome","Goliath","Halfling","Human","Orc","Tiefling"];
+  // RACE_OPTIONS is declared at module scope now (see near CLASS_OPTIONS) so
+  // the Settings tab's Homebrew Content -> Ancestries section can read it too.
   // Base walking speed + other movement types per race, used only during
   // character creation (see isCreate below under Combat Values) to auto-fill
   // Base Speed/Movement Types instead of asking the user to type them in.
@@ -9941,31 +12535,84 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
   // "best-effort, treat as a draft" caveat as this file's other built-in
   // game-data tables (SUBCLASS_LEVEL_FEATURES, CANTRIP_CLASS_LIST, etc.).
   const RACE_SPEED_DATA = {
+    Aarakocra: { speed: 30, movement: "Walking, Flying (30 ft.)" },
+    Aasimar: { speed: 30, movement: "Walking" },
+    "Astral Elf": { speed: 30, movement: "Walking" },
+    Autognome: { speed: 30, movement: "Walking" },
+    Bugbear: { speed: 30, movement: "Walking" },
+    Centaur: { speed: 40, movement: "Walking" },
+    Changeling: { speed: 30, movement: "Walking" },
+    "Deep Gnome": { speed: 30, movement: "Walking" },
+    Dhampir: { speed: 35, movement: "Walking" }, // corrected 2026-09-21 to match Astarion's Book of Hungers (was 30)
     Dragonborn: { speed: 30, movement: "Walking" },
+    Duergar: { speed: 30, movement: "Walking" },
     Dwarf: { speed: 30, movement: "Walking" },
+    Eladrin: { speed: 30, movement: "Walking" },
     Elf: { speed: 30, movement: "Walking" },
+    Fairy: { speed: 30, movement: "Walking, Flying (30 ft.)" },
+    Firbolg: { speed: 30, movement: "Walking" },
+    Genasi: { speed: 30, movement: "Walking" },
+    Giff: { speed: 30, movement: "Walking" },
+    Githyanki: { speed: 30, movement: "Walking" },
+    Githzerai: { speed: 30, movement: "Walking" },
     Gnome: { speed: 30, movement: "Walking" },
+    Goblin: { speed: 30, movement: "Walking" },
     Goliath: { speed: 35, movement: "Walking" },
-    // 30 ft. per SRD 5.2.1 (the 2024 rules bumped Halfling's Speed from the
-    // 2014 PHB's 25 ft. up to 30 ft.).
-    Halfling: { speed: 30, movement: "Walking" },
+    Grung: { speed: 25, movement: "Walking, Climbing (25 ft.)" },
+    Hadozee: { speed: 30, movement: "Walking" },
+    Halfling: { speed: 25, movement: "Walking" },
+    "Half-Elf": { speed: 30, movement: "Walking" },
+    "Half-Orc": { speed: 30, movement: "Walking" },
+    Harengon: { speed: 30, movement: "Walking" },
+    Hexblood: { speed: 30, movement: "Walking" },
+    // 25 ft., not the unified 2024 Dwarf's 30 ft. - the 2014 PHB Dwarf
+    // (and both its subraces) walked at 25 ft., same as Gnome; 2024
+    // bumped both up to 30, but a Hill/Mountain Dwarf sheet is explicitly
+    // built under the older rules (see RACE_TRAITS' comment on these).
+    "Hill Dwarf": { speed: 25, movement: "Walking" },
+    Hobgoblin: { speed: 30, movement: "Walking" },
     Human: { speed: 30, movement: "Walking" },
+    Kalashtar: { speed: 30, movement: "Walking" },
+    Kenku: { speed: 30, movement: "Walking" },
+    Kobold: { speed: 30, movement: "Walking" },
+    Leonin: { speed: 35, movement: "Walking" },
+    Lizardfolk: { speed: 30, movement: "Walking, Swimming (30 ft.)" },
+    Locathah: { speed: 30, movement: "Walking, Swimming (30 ft.)" },
+    Loxodon: { speed: 30, movement: "Walking" },
+    Minotaur: { speed: 30, movement: "Walking" },
+    "Mountain Dwarf": { speed: 25, movement: "Walking" },
     Orc: { speed: 30, movement: "Walking" },
+    Owlfolk: { speed: 30, movement: "Walking, Flying (30 ft.)" },
+    Plasmoid: { speed: 30, movement: "Walking" },
+    Reborn: { speed: 30, movement: "Walking" },
+    Satyr: { speed: 35, movement: "Walking" },
+    "Sea Elf": { speed: 30, movement: "Walking, Swimming (30 ft.)" },
+    Shifter: { speed: 30, movement: "Walking" },
+    "Simic Hybrid": { speed: 30, movement: "Walking" },
+    Tabaxi: { speed: 30, movement: "Walking, Climbing (30 ft.)" },
+    "Thri-kreen": { speed: 30, movement: "Walking" },
     Tiefling: { speed: 30, movement: "Walking" },
+    Tortle: { speed: 30, movement: "Walking" },
+    Triton: { speed: 30, movement: "Walking, Swimming (30 ft.)" },
+    Vedalken: { speed: 30, movement: "Walking" },
+    Verdan: { speed: 30, movement: "Walking" },
+    Warforged: { speed: 30, movement: "Walking" },
+    "Yuan-Ti Pureblood": { speed: 30, movement: "Walking" },
   };
   const SUBCLASS_MAP = {
-    "Barbarian": ["Berserker"],
-    "Bard": ["College of Lore"],
-    "Cleric": ["Life Domain"],
-    "Druid": ["Circle of the Land"],
-    "Fighter": ["Champion"],
-    "Monk": ["Warrior of the Open Hand"],
-    "Paladin": ["Oath of Devotion"],
-    "Ranger": ["Hunter"],
-    "Rogue": ["Thief"],
-    "Sorcerer": ["Draconic Sorcery"],
-    "Warlock": ["Fiend Patron"],
-    "Wizard": ["Evoker"],
+    "Artificer": ["Alchemist","Armorer","Artillerist","Battle Smith"],
+    "Barbarian": ["Ancestral Guardian","Battlerager","Berserker","Storm Herald","Totem Warrior","Zealot"],
+    "Bard": ["College of Creation","College of Eloquence","College of Glamour","College of Lore","College of Swords","College of the Moon","College of Valor","College of Whispers"],
+    "Cleric": ["Arcana Domain","Death Domain","Forge Domain","Grave Domain","Knowledge Domain","Life Domain","Light Domain","Nature Domain","Order Domain","Peace Domain","Tempest Domain","Trickery Domain","Twilight Domain","War Domain"],
+    "Druid": ["Circle of Dreams","Circle of Spores","Circle of Stars","Circle of the Land","Circle of the Moon","Circle of the Shepherd","Circle of Wildfire"],
+    "Fighter": ["Arcane Archer","Battle Master","Cavalier","Champion","Echo Knight","Eldritch Knight","Psi Warrior","Purple Dragon Knight","Rune Knight","Samurai"],
+    "Monk": ["Drunken Master","Four Elements","Kensei","Long Death","Mercy","Open Hand","Shadow","Sun Soul","Warrior of the Mystic Arts"],
+    "Paladin": ["Ancients","Conquest","Crown","Devotion","Glory","Oathbreaker","Oath of the Noble Genies","Redemption","Vengeance","Watchers"],
+    "Ranger": ["Beast Master","Fey Wanderer","Gloom Stalker","Horizon Walker","Hunter","Monster Slayer","Swarmkeeper","Winter Walker"],
+    "Rogue": ["Arcane Trickster","Assassin","Inquisitive","Mastermind","Phantom","Scion of the Three","Scout","Soulknife","Swashbuckler","Thief"],
+    "Sorcerer": ["Aberrant Mind","Clockwork Soul","Divine Soul","Draconic Bloodline","Shadow Magic","Spellfire Sorcery","Storm Sorcery","Wild Magic"],
+    "Warlock": ["Archfey","Celestial","Fathomless","Fiend","Genie","Great Old One","Hexblade","Undead","Undying","Vestige Patron"],
+    "Wizard": ["Bladesinging","Chronurgy","Graviturgy","Lore Mastery","Order of Scribes","School of Abjuration","School of Conjuration","School of Divination","School of Enchantment","School of Evocation","School of Illusion","School of Necromancy","School of Transmutation","War Magic"],
   };
   const ALIGNMENT_OPTIONS = ["Lawfull Good","Neutral Good","Chaotic Good","Lawfull Neutral","True Neutral","Chaotic Neutral","Lawfull Evil","Neutral Evil","Chaotic Evil"];
 
@@ -10029,7 +12676,7 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
   // a real, separate pick from the species itself - shown here as its own
   // dropdown, right next to Race, whenever the currently-selected race has
   // one (see findRaceSubChoiceTrait); hidden entirely for a race that
-  // doesn't (Human, Orc, etc.). This is purely a convenience surface
+  // doesn't (Human, Half-Orc, etc.). This is purely a convenience surface
   // for what's still the same underlying pick every other choice-driven
   // feature uses (see FEATURE_CHOICE_DEFS/findFeatureChoiceDef) - it's
   // wired into the Features page's own starting-feature draft below
@@ -10155,17 +12802,29 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
   // auto-fill side effects below are wired up for it anyway.
   let backgroundInput, backgroundSelect, backgroundCustomInput, backgroundBonusContainer, toolProficiencyStatus;
   if (isCreate) {
-    const initialBg = BACKGROUND_DATA_2024[page.background] ? page.background : "";
-    backgroundSelect = selectField(leftCol, "Background", initialBg, BACKGROUND_OPTIONS);
+    const initialBg = getBackgroundData(page.background) ? page.background : "";
+    backgroundSelect = selectField(leftCol, "Background", initialBg, getAllBackgroundOptions());
+    // Homebrew backgrounds (see openHomebrewBackgroundWizard) can carry a
+    // Description, same as Classes/Subclasses/Races - built-in backgrounds
+    // have no such text in BACKGROUND_DATA_2024, so this stays empty for
+    // them, same "homebrew-only, no built-in equivalent" status as
+    // getSubclassDescription.
+    const backgroundDescStatus = leftCol.createEl("div", { cls: "condition-desc" });
+    const updateBackgroundDesc = () => {
+      const hb = HOMEBREW.backgrounds.find((b) => b.name === backgroundSelect.value);
+      backgroundDescStatus.setText(hb && hb.description ? hb.description : "");
+    };
     const customRow = leftCol.createEl("div", { cls: "action-modal-row" });
     customRow.createEl("span", { cls: "action-modal-label", text: "" });
     backgroundCustomInput = customRow.createEl("input", { type: "text", cls: "action-modal-name" });
     backgroundCustomInput.placeholder = "Custom background name";
-    backgroundCustomInput.value = BACKGROUND_DATA_2024[page.background] ? "" : (page.background || "");
+    backgroundCustomInput.value = getBackgroundData(page.background) ? "" : (page.background || "");
     customRow.style.display = backgroundSelect.value === "Custom" ? "" : "none";
     backgroundSelect.addEventListener("change", () => {
       customRow.style.display = backgroundSelect.value === "Custom" ? "" : "none";
+      updateBackgroundDesc();
     });
+    updateBackgroundDesc();
     backgroundInput = {
       get value() {
         return backgroundSelect.value === "Custom" ? backgroundCustomInput.value : backgroundSelect.value;
@@ -10573,13 +13232,18 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
   rightCol.createEl("div", { cls: "stat-subheader", text: "Passive Senses" });
   // Passive Perception/Investigation/Insight aren't free values of their
   // own - each is just 10 + that skill's own modifier - so instead of a
-  // manually-typed number, each row gets a proficiency checkbox (kept in
-  // sync with the matching skill's own checkbox down in the Skills list -
-  // see the sync wiring right after skillRows below) plus a plain,
-  // non-editable computed total. recalcAll() (below, once abilityRows/
-  // skillRows/levelSelect all exist) keeps these live as ability scores,
-  // proficiency, or level change - same mechanism the Saves/Skills totals
-  // already use.
+  // manually-typed number, each row gets a plain, non-editable computed
+  // total plus a read-only proficiency indicator that mirrors the matching
+  // skill's own checkbox down in the Skills list (see the one-way sync in
+  // recalcAll below). recalcAll() (once abilityRows/skillRows/levelSelect
+  // all exist) keeps these live as ability scores, proficiency, or level
+  // change - same mechanism the Saves/Skills totals already use. This used
+  // to also be checkable here, and checking it would silently grant the
+  // matching skill proficiency too - same "not something the player hand-
+  // picks" reasoning as Saving Throws' own disabled checkbox above: being
+  // proficient in Perception is what makes you proficient in Passive
+  // Perception, never the other way around, so this stays a pure, one-way
+  // read-out of whatever the Skills list already says.
   const PASSIVE_SENSE_SKILLS = {
     "Passive Perception": { skill: "Perception", ability: "WIS" },
     "Passive Investigation": { skill: "Investigation", ability: "INT" },
@@ -10594,7 +13258,8 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
     if (info) {
       const initialSkill = rawSkillsForInit.find((s) => s.name === info.skill);
       const profCb = row.createEl("input", { type: "checkbox" });
-      profCb.title = `Proficient in ${info.skill}`;
+      profCb.disabled = true;
+      profCb.title = `Proficient in ${info.skill} - shown here automatically, check ${info.skill} on the Skills list below to change it.`;
       profCb.checked = !!(initialSkill && initialSkill.prof);
       const valueSpan = row.createEl("span", { cls: "condition-desc", text: String(item.value ?? 10) });
       return { name: item.name, skillName: info.skill, ability: info.ability, profCb, valueSpan };
@@ -10663,8 +13328,21 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
   const saveRows = saves.map((s) => {
     const row = rightCol.createEl("div", { cls: "save-edit-row" });
     row.createEl("span", { cls: "action-modal-label", text: s.ability });
+    // Saving throw proficiency is never a manual pick - 2024 rules fix it
+    // entirely to whichever two saves the character's (first) class grants
+    // (CLASS_SAVING_THROWS, applied below by applyClassSavingThrows - the
+    // same table and mechanism Create Character and Update Character Sheet
+    // both use, so this now behaves identically in either wizard instead of
+    // Update leaving it as a free-standing checkbox). This still has to
+    // stay a real <input type="checkbox"> internally, since recalcAll
+    // (and every other saveRow consumer elsewhere in this file) only ever
+    // reads/sets .checked and listens for "change" - disabling it is what
+    // stops the player from clicking or tabbing to it, without touching any
+    // of that.
     const profCb = row.createEl("input", { type: "checkbox" });
     profCb.checked = !!s.prof;
+    profCb.disabled = true;
+    profCb.title = "Saving throw proficiency is fixed by class and calculated automatically - it isn't a manual choice.";
     // Plain, non-editable text - same idea as the Ability Score modifier
     // preview next to each dropdown. This always tracks the live-computed
     // total (see recalcAll below), so there's nothing for a free-text field
@@ -10673,6 +13351,43 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
     modInput.textContent = s.mod;
     return { ability: s.ability, profCb, modInput };
   });
+
+  // Auto-applies this character's (first) class's two saving-throw
+  // proficiencies to the (now-disabled) checkboxes above, every time Class
+  // changes and once on initial render - shared by Create Character and
+  // Update Character Sheet alike, since saveRows/classSelect are both
+  // local to this one function. classAutoSaves tracks only the two boxes
+  // THIS mechanism itself last checked, so switching class away again
+  // cleanly un-checks just those two rather than clobbering a save
+  // proficiency granted some other way (a feat like Resilient, a homebrew
+  // rule) that was already true on an ability outside the class's own pair -
+  // same pattern this function's own backgroundAutoSkills uses below for
+  // Skills. (Previously Update Character Sheet deliberately skipped this,
+  // leaving Saves as a plain manually-toggled checkbox, specifically so it
+  // would never override something non-standard already saved - but Saves
+  // are a computed, not a player-editable, stat, so that's now handled by
+  // simply never exposing a way to toggle it instead.)
+  let classAutoSaves = [];
+  const applyClassSavingThrows = () => {
+    for (const abbr of classAutoSaves) {
+      const row = saveRows.find((s) => s.ability === abbr);
+      if (row) {
+        row.profCb.checked = false;
+        row.profCb.dispatchEvent(new Event("change"));
+      }
+    }
+    classAutoSaves = [];
+    for (const abbr of CLASS_SAVING_THROWS[classSelect.value] || []) {
+      const row = saveRows.find((s) => s.ability === abbr);
+      if (row) {
+        row.profCb.checked = true;
+        row.profCb.dispatchEvent(new Event("change"));
+        classAutoSaves.push(abbr);
+      }
+    }
+  };
+  classSelect.addEventListener("change", applyClassSavingThrows);
+  applyClassSavingThrows();
 
   rightCol.createEl("div", { cls: "stat-subheader", text: "Skills" });
   const skills = (page.skills_list && page.skills_list.length) ? page.skills_list : STANDARD_SKILLS;
@@ -10686,6 +13401,48 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
     modInput.textContent = item.mod;
     return { ability: item.ability, name: item.name, profCb, modInput };
   });
+
+  // ---- Skill proficiency cap ----
+  // Unlike Saves, Skills genuinely are the player's own pick, so the
+  // checkbox stays - but nothing previously stopped a player from just
+  // checking every single skill. 2024 rules grant a fixed total: a
+  // Background's own 2 skills (BACKGROUND_SKILL_COUNT, applied below by
+  // applyBackgroundSkillsAndTool - not a free choice) plus however many a
+  // class lets you choose for yourself (CLASS_SKILL_CHOICES/
+  // getClassSkillAllowance). skillCapFloor only ever ratchets UP (never
+  // down) to whatever's actually checked at any point, so this can never
+  // silently un-check something already granted some other way (re-opening
+  // Update Character Sheet on a character with an extra proficiency from a
+  // feat like Skillful, a homebrew rule, or a class switch that briefly
+  // lowers the rule-cap below what's already checked) - it only ever stops
+  // a NEW box being checked past the current allowance.
+  const countCheckedSkills = () => skillRows.filter((sk) => sk.profCb.checked).length;
+  let skillCapFloor = countCheckedSkills();
+  const refreshSkillCapFloor = () => { skillCapFloor = Math.max(skillCapFloor, countCheckedSkills()); };
+  const getSkillCap = () => Math.max(BACKGROUND_SKILL_COUNT + getClassSkillAllowance(classSelect.value).count, skillCapFloor);
+  const skillCapNoteEl = rightCol.createEl("div", { cls: "wizard-empty-note" });
+  skillCapNoteEl.style.display = "none";
+  const flashSkillCapWarning = () => {
+    const allowance = getClassSkillAllowance(classSelect.value);
+    const className = classSelect.value || "this class";
+    const list = allowance.skills ? allowance.skills.join(", ") : "any skill";
+    skillCapNoteEl.textContent =
+      `You've already got ${BACKGROUND_SKILL_COUNT} skill(s) from your Background plus ${allowance.count} from ${className} ` +
+      `(${list}) - uncheck one first.`;
+    skillCapNoteEl.style.display = "";
+  };
+  const clearSkillCapWarning = () => { skillCapNoteEl.style.display = "none"; };
+  for (const sk of skillRows) {
+    sk.profCb.addEventListener("change", () => {
+      if (sk.profCb.checked && countCheckedSkills() > getSkillCap()) {
+        sk.profCb.checked = false;
+        flashSkillCapWarning();
+      } else {
+        clearSkillCapWarning();
+      }
+    });
+  }
+  classSelect.addEventListener("change", refreshSkillCapFloor);
 
   // Saving Throw and Skill modifiers recalculate live from ability scores,
   // proficiency checkboxes, and level - no manual "Recalculate" button.
@@ -10713,9 +13470,8 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
     }
     // Passive Perception/Investigation/Insight = 10 + that skill's total.
     // The matching skillRow (found by name) is the source of truth for
-    // proficiency - this also mirrors it back onto the passive row's own
-    // checkbox, so whichever one the user actually clicked, both stay
-    // showing the same state.
+    // proficiency, one-way only - this just mirrors it onto the passive
+    // row's own (disabled) checkbox for display, it never writes back.
     for (const sr of senseRows) {
       if (!sr.skillName) continue;
       const linkedSkill = skillRows.find((sk) => sk.name === sr.skillName);
@@ -10727,14 +13483,6 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
   };
   for (const s of saveRows) s.profCb.addEventListener("change", recalcAll);
   for (const sk of skillRows) sk.profCb.addEventListener("change", recalcAll);
-  for (const sr of senseRows) {
-    if (!sr.skillName) continue;
-    sr.profCb.addEventListener("change", () => {
-      const linkedSkill = skillRows.find((sk) => sk.name === sr.skillName);
-      if (linkedSkill) linkedSkill.profCb.checked = sr.profCb.checked;
-      recalcAll();
-    });
-  }
   levelSelect.addEventListener("change", recalcAll);
   multiclassCheckbox.addEventListener("change", recalcAll);
   secondaryLevelSelect.addEventListener("change", recalcAll);
@@ -10748,7 +13496,7 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
     const renderBonusUI = () => {
       backgroundBonusContainer.empty();
       const bg = backgroundSelect.value;
-      const data = BACKGROUND_DATA_2024[bg];
+      const data = getBackgroundData(bg);
       if (!data) {
         bonusRefs = null;
         return;
@@ -10827,7 +13575,7 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
     // independently is left alone when the background changes again.
     let backgroundAutoSkills = [];
     const applyBackgroundSkillsAndTool = () => {
-      const data = BACKGROUND_DATA_2024[backgroundSelect.value];
+      const data = getBackgroundData(backgroundSelect.value);
       for (const name of backgroundAutoSkills) {
         const row = skillRows.find((sk) => sk.name === name);
         if (row) {
@@ -11411,7 +14159,7 @@ function buildAttackOverflowRowsContent(rows, note) {
 const PDF_ABILITY_FULL_NAMES = { str: "Strength", dex: "Dexterity", con: "Constitution", int: "Intelligence", wis: "Wisdom", cha: "Charisma" };
 
 // Mirrors SpellsTracker.render()'s multiclass/Pact Magic spell-slot
-// combination logic (full/half casters combine into one
+// combination logic (full/half/third/artificer casters combine into one
 // shared table by combined caster level, Pact Magic is always separate -
 // see that method's own comments for the reasoning) as a standalone
 // function, so exportCharacterPdf below can get the same Slots Total/
@@ -11432,13 +14180,15 @@ const PDF_ABILITY_FULL_NAMES = { str: "Strength", dex: "Dexterity", con: "Consti
 // simply summed for that level.
 function computeSpellSlotsForExport(fm, abFm, spellsFm) {
   const classNames = String(fm.class || "").split(" / ").map((s) => s.trim()).filter(Boolean);
+  const subclassNames = String(abFm.subclass || "").split(" / ").map((s) => s.trim()).filter(Boolean);
   const classLevelsFm = abFm.class_levels || {};
+  const isThirdCasterSheet = subclassNames.some((s) => THIRD_CASTER_SUBCLASSES.includes(s.toLowerCase()));
   const levelForClass = (cname) =>
     classNames.length <= 1 ? Number(fm.level) || 0 : Number(classLevelsFm[cname]) || 0;
   const classProgressions = classNames
     .map((cname) => {
       const key = cname.toLowerCase();
-      const type = CLASS_PROGRESSION[key];
+      const type = CLASS_PROGRESSION[key] || (isThirdCasterSheet ? "third" : undefined);
       return { name: cname, type, level: levelForClass(cname) };
     })
     .filter((c) => c.type);
@@ -11458,12 +14208,17 @@ function computeSpellSlotsForExport(fm, abFm, spellsFm) {
   if (otherCasters.length === 1 && !warlockEntry) {
     const only = otherCasters[0];
     combinedTable = lookupTable(only.type, only.level);
-    spellcastingClassName = only.name;
+    spellcastingClassName =
+      only.type === "third"
+        ? subclassNames.find((s) => THIRD_CASTER_SUBCLASSES.includes(s.toLowerCase())) || only.name
+        : only.name;
   } else if (otherCasters.length >= 1) {
     let combinedLevel = 0;
     for (const c of otherCasters) {
       if (c.type === "full") combinedLevel += c.level;
       else if (c.type === "half") combinedLevel += Math.floor(c.level / 2);
+      else if (c.type === "third") combinedLevel += Math.floor(c.level / 3);
+      else if (c.type === "artificer") combinedLevel += Math.ceil(c.level / 2);
     }
     combinedTable = lookupTable("full", combinedLevel);
     spellcastingClassName = otherCasters.map((c) => c.name).join(" / ");
@@ -11986,7 +14741,7 @@ class OverviewTracker extends MarkdownRenderChild {
     const ABILITY_KEYS = ["str", "dex", "con", "int", "wis", "cha"];
     const currentLevelFor = (className) => (classes.length > 1 ? Number(classLevels[className]) || 1 : Number(fm.level) || 1);
 
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "action-modal-overlay";
     const modal = overlay.createEl("div", { cls: "action-modal action-modal-wide" });
     modal.createEl("h3", { text: "Level Up" });
@@ -12082,28 +14837,59 @@ class OverviewTracker extends MarkdownRenderChild {
           const choiceDef = findFeatureChoiceDef(name);
           if (choiceDef) {
             const ctx = { className, subclassName: subclassForClass(className), newLevel, app: this.app };
-            const count = typeof choiceDef.count === "function" ? choiceDef.count(ctx) : choiceDef.count;
-            const options = typeof choiceDef.options === "function" ? choiceDef.options({ ...ctx, abilitiesFm: abFm }) : choiceDef.options;
-            const describeMap = typeof choiceDef.describe === "function" ? choiceDef.describe({ ...ctx, abilitiesFm: abFm }) : choiceDef.describe;
             choiceBlock = featuresContainer.createEl("div", { cls: "feature-desc-block feature-choice-block" });
-            choiceBlock.createEl("div", {
-              cls: "condition-desc",
-              text: `Choose ${count}${choiceDef.hint ? " - " + choiceDef.hint : ""}:`,
-            });
-            const select = choiceBlock.createEl("select", {
-              cls: "feature-choice-select",
-              attr: { multiple: true, size: String(Math.min(options.length, 6)) },
-            });
-            for (const o of options) {
-              const opt = select.createEl("option", { text: o });
-              opt.value = o;
-              if (describeMap && describeMap[o]) opt.title = describeMap[o];
+            // A def can supply its own renderPicker (e.g. "magic initiate" -
+            // see FEATURE_CHOICE_DEFS) instead of the plain options/count
+            // multi-select below, for a choice that needs more structure
+            // than "pick N from one flat list" - checked first here, same
+            // as both buildFeaturesPage copies' matching choice blocks.
+            if (choiceDef.renderPicker) {
+              let liveChosen = [];
+              choiceDef.renderPicker(choiceBlock, {
+                ctx: { ...ctx, abilitiesFm: abFm },
+                initialChosen: [],
+                onChosenChange: (next) => {
+                  liveChosen = next;
+                },
+              });
+              getChosen = () => liveChosen;
+              getChosenSuffix = () => {
+                const chosen = getChosen();
+                return chosen.length ? ` Chosen: ${chosen.join(", ")}.` : "";
+              };
+            } else {
+              const count = typeof choiceDef.count === "function" ? choiceDef.count(ctx) : choiceDef.count;
+              const options = typeof choiceDef.options === "function" ? choiceDef.options({ ...ctx, abilitiesFm: abFm }) : choiceDef.options;
+              const describeMap = typeof choiceDef.describe === "function" ? choiceDef.describe({ ...ctx, abilitiesFm: abFm }) : choiceDef.describe;
+              choiceBlock.createEl("div", {
+                cls: "condition-desc",
+                text: `Choose ${count}${choiceDef.hint ? " - " + choiceDef.hint : ""}:`,
+              });
+              const select = choiceBlock.createEl("select", {
+                cls: "feature-choice-select",
+                attr: { multiple: true, size: String(Math.min(options.length, 6)) },
+              });
+              for (const o of options) {
+                const opt = select.createEl("option", { text: o });
+                opt.value = o;
+                if (describeMap && describeMap[o]) opt.title = describeMap[o];
+              }
+              // Only shown when this feature actually needs more than one
+              // pick - a count-of-1 choice (Fighting Style, Divine Order,
+              // etc.) never needs the modifier key at all, so telling the
+              // player to hold one would just be confusing/wrong for those.
+              if ((Number(count) || 0) > 1) {
+                choiceBlock.createEl("div", {
+                  cls: "feature-choice-hint",
+                  text: "Ctrl/Cmd-click (or shift-click) to select more than one.",
+                });
+              }
+              getChosen = () => Array.from(select.selectedOptions).map((o) => o.value);
+              getChosenSuffix = () => {
+                const chosen = getChosen();
+                return chosen.length ? ` Chosen: ${chosen.join(", ")}.` : "";
+              };
             }
-            getChosen = () => Array.from(select.selectedOptions).map((o) => o.value);
-            getChosenSuffix = () => {
-              const chosen = getChosen();
-              return chosen.length ? ` Chosen: ${chosen.join(", ")}.` : "";
-            };
           }
         }
 
@@ -12314,9 +15100,9 @@ class OverviewTracker extends MarkdownRenderChild {
       });
 
       // ---- New Spells - only for "known"-mode classes (Bard/Ranger/
-      // Sorcerer/Warlock/Wizard), which permanently learn a fixed list.
-      // Cleric/Druid/Paladin prepare fresh from their whole list every
-      // Long Rest (see
+      // Sorcerer/Warlock/Wizard, plus Eldritch Knight/Arcane Trickster),
+      // which permanently learn a fixed list. Cleric/Druid/Paladin/
+      // Artificer prepare fresh from their whole list every Long Rest (see
       // spellChoiceModeFor's "prepare" mode), so there's nothing PERMANENT
       // to pick here even when they reach a new spell level - any new
       // access they gain just widens what they can choose to prepare next,
@@ -12326,11 +15112,16 @@ class OverviewTracker extends MarkdownRenderChild {
       const subclassNameForSpells = subclassForClass(className);
       const spellMode = spellChoiceModeFor(className, subclassNameForSpells);
       if (spellMode === "known") {
-        const cantripListClass = className;
+        const isThirdCaster = THIRD_CASTER_SUBCLASSES.includes(String(subclassNameForSpells || "").toLowerCase());
+        const cantripListClass = isThirdCaster ? "Wizard" : className;
         const edition = "2024";
         const newMaxLvl = maxSpellLevelFor(className, subclassNameForSpells, newLevel, edition);
-        const oldCap = spellsKnownCapFor(className, currentLevel);
-        const newCap = spellsKnownCapFor(className, newLevel);
+        // Third casters (Eldritch Knight/Arcane Trickster) have no
+        // SPELLS_KNOWN_TABLE entry (see its comment) - their picker below
+        // still appears when they reach a new spell level, just with no
+        // enforced count, same as this file's other "no table" fallbacks.
+        const oldCap = isThirdCaster ? null : spellsKnownCapFor(className, currentLevel);
+        const newCap = isThirdCaster ? null : spellsKnownCapFor(className, newLevel);
         const gained = oldCap != null && newCap != null ? Math.max(0, newCap - oldCap) : null;
         const somethingToShow = newMaxLvl > 0 && (gained == null || gained > 0);
         if (somethingToShow) {
@@ -12594,7 +15385,7 @@ class OverviewTracker extends MarkdownRenderChild {
       await this.render(resultAbFm);
     };
 
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
   }
 
   textField(container, label, value) {
@@ -12704,7 +15495,7 @@ class OverviewTracker extends MarkdownRenderChild {
     // match instead of defaulting back to the first option.
     page.raceSubChoice = resolveRaceSubChoice(featuresFm.limited_uses);
 
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "action-modal-overlay";
     const modal = overlay.createEl("div", { cls: "action-modal action-modal-wide" });
 
@@ -12864,7 +15655,7 @@ class OverviewTracker extends MarkdownRenderChild {
     // modals are built at very different points in this file and neither
     // currently shares a "wizard chrome" module of its own.
     const openWizardConfirmPopup = ({ title, description, summaryLines, detailHeading, detailRows, emptyDetailNote, onConfirm }) => {
-      const confirmOverlay = document.createElement("div");
+      const confirmOverlay = activeDocument.createElement("div");
       confirmOverlay.className = "wizard-confirm-overlay";
       const confirmModal = confirmOverlay.createEl("div", { cls: "wizard-confirm-modal" });
       const header = confirmModal.createEl("div", { cls: "wizard-confirm-header" });
@@ -12900,7 +15691,7 @@ class OverviewTracker extends MarkdownRenderChild {
         onConfirm();
         confirmOverlay.remove();
       };
-      document.body.appendChild(confirmOverlay);
+      activeDocument.body.appendChild(confirmOverlay);
     };
 
     // ---- Species picker: searchable card list, same as Create Character.
@@ -13026,9 +15817,7 @@ class OverviewTracker extends MarkdownRenderChild {
     moveRange(backgroundLeftCol, backgroundRowEl, languageRowEl);
 
     // ---- Class Info panel (Class page, right column) - identical copy of
-    // Create Character's own version; pure read-only display, so reusing
-    // it here for an existing character carries none of the "might silently
-    // change saved data" risk applyClassSavingThrows below does.
+    // Create Character's own version; pure read-only display.
     const renderClassInfoPanel = () => {
       classInfoCol.empty();
       const className = classSelect.value;
@@ -13052,6 +15841,11 @@ class OverviewTracker extends MarkdownRenderChild {
       }
       const level = Number(levelSelect.value) || 1;
       const subclassName = level >= 3 ? subclassSelect.value : "";
+      const subclassDesc = getSubclassDescription(className, subclassName);
+      if (subclassDesc) {
+        classInfoCol.createEl("div", { cls: "stat-subheader", text: subclassName });
+        classInfoCol.createEl("p", { cls: "wizard-confirm-desc", text: subclassDesc });
+      }
       const features = collectFeaturesUpToLevel(className, subclassName, level);
       classInfoCol.createEl("div", { cls: "stat-subheader", text: `Features at Level ${level}` });
       if (!features.length) {
@@ -13069,19 +15863,12 @@ class OverviewTracker extends MarkdownRenderChild {
     levelSelect.addEventListener("change", renderClassInfoPanel);
     renderClassInfoPanel();
 
-    // Deliberately NOT reusing Create Character's applyClassSavingThrows
-    // here (it auto-checks a class's two saving-throw proficiency boxes
-    // whenever Class changes, then auto-unchecks whatever it auto-checked
-    // if Class changes away again). That's the right default for a
-    // brand-new character with nothing set yet, but for an ALREADY-
-    // established character it would silently flip Saves checkboxes to
-    // match class defaults the instant this modal opens or Class is
-    // touched - if those checkboxes currently reflect something other than
-    // the plain class default (a feat, a homebrew rule, a DM ruling) and
-    // the player doesn't notice before clicking Save, their real saves get
-    // overwritten. Same category of risk this session's Dorin investigation
-    // was all about, so Saves stay exactly as manually set on this page,
-    // same as this modal has always behaved.
+    // Saving-throw proficiency: no longer a manually-toggled checkbox at
+    // all, in this modal or Create Character - see buildCharSheetFields's
+    // own comment on applyClassSavingThrows for why. Saves are a computed
+    // stat, so there's nothing left to wire up on this page; re-opening
+    // this modal (or changing Class here) will correctly re-derive the two
+    // saves this character's class grants, same as Create Character.
 
     // ---- Species Info panel (Species page, right column) - identical copy
     // of Create Character's own version.
@@ -13192,17 +15979,19 @@ class OverviewTracker extends MarkdownRenderChild {
       for (const q of qualifying) {
         const classLevel = classLevelFor(q.className);
         const maxLvl = maxSpellLevelFor(q.className, q.subclassName, level, edition);
-        const cantripListClass = q.className;
-        const canHaveCantrips = CANTRIP_CASTERS.includes(q.className);
-        const spellsKnownCap =
-          q.mode === "prepare"
+        const isThirdCaster = THIRD_CASTER_SUBCLASSES.includes(String(q.subclassName || "").toLowerCase());
+        const cantripListClass = isThirdCaster ? "Wizard" : q.className;
+        const canHaveCantrips = CANTRIP_CASTERS.includes(q.className) || isThirdCaster;
+        const spellsKnownCap = isThirdCaster
+          ? null
+          : q.mode === "prepare"
           ? preparedSpellsCapFor(q.className, classLevel, getAbilityModForClass(q.className))
           : spellsKnownCapFor(q.className, classLevel);
         // Cantrips Known is always a fixed, permanently-learned count (see
         // CANTRIPS_KNOWN_TABLE's comment) - independent of q.mode, unlike
         // spellsKnownCap above, so a "prepare"-mode class (Cleric/Druid)
         // gets capped here too, not just "known"-mode ones.
-        const cantripsCap = canHaveCantrips ? cantripsKnownCapFor(q.className, classLevel) : null;
+        const cantripsCap = canHaveCantrips ? cantripsKnownCapFor(q.className, classLevel, isThirdCaster) : null;
         const accessible = allSpells.filter((sp) => {
           const lvl = Number(sp.fm["Spell level"] ?? 0);
           if (lvl === 0) {
@@ -13218,7 +16007,7 @@ class OverviewTracker extends MarkdownRenderChild {
         if (q.mode === "prepare") {
           section.createEl("div", {
             cls: "wizard-spell-hint",
-            text: "This class re-prepares its spells from its whole class list after every Long Rest. Select which ones are prepared for today - the cap below is your spellcasting ability modifier plus your class level (half level, rounded down, for a half caster), minimum 1.",
+            text: "This class re-prepares its spells from its whole class list after every Long Rest. Select which ones are prepared for today - the cap below is your spellcasting ability modifier plus your class level (half level, rounded down, for a half caster or Artificer), minimum 1.",
           });
         }
 
@@ -13238,18 +16027,6 @@ class OverviewTracker extends MarkdownRenderChild {
         const levelLabel = (lvl) => (lvl === 0 ? "Cantrips" : `${lvl}${["", "st", "nd", "rd"][lvl] || "th"} Level`);
         const availableLevels = Object.keys(byLevel).map(Number).sort((a, b) => a - b);
 
-        const filterRow = section.createEl("div", { cls: "action-modal-row" });
-        filterRow.createEl("span", { cls: "action-modal-label", text: "Show" });
-        const levelFilterSelect = filterRow.createEl("select", { cls: "action-modal-name" });
-        const allLevelsOpt = levelFilterSelect.createEl("option", { text: "All Levels" });
-        allLevelsOpt.value = "all";
-        for (const lvl of availableLevels) {
-          const opt = levelFilterSelect.createEl("option", { text: levelLabel(lvl) });
-          opt.value = String(lvl);
-        }
-        if (availableLevels.length) levelFilterSelect.value = String(availableLevels[0]);
-
-        const select = section.createEl("select", { cls: "wizard-spell-select", attr: { multiple: true, size: 8 } });
         let rec = wizardState.spellSelections.find((s) => s.className === q.className);
         const candidateNames = accessible.map((sp) => sp.file.basename);
         if (!rec) {
@@ -13263,57 +16040,49 @@ class OverviewTracker extends MarkdownRenderChild {
           rec.candidateNames = candidateNames;
         }
         const preselected = new Set(rec.spellNames);
-        const groupsByLevel = {};
-        for (const lvl of availableLevels) {
-          const group = select.createEl("optgroup", { attr: { label: levelLabel(lvl) } });
-          groupsByLevel[lvl] = group;
-          byLevel[lvl]
-            .sort((a, b) => a.file.basename.localeCompare(b.file.basename))
-            .forEach((sp) => {
-              const opt = group.createEl("option", { text: sp.file.basename });
-              opt.value = sp.file.basename;
-              opt.dataset.level = String(lvl);
-              if (preselected.has(sp.file.basename)) opt.selected = true;
-            });
-        }
-        const applyLevelFilter = () => {
-          const chosen = levelFilterSelect.value;
-          for (const lvl of availableLevels) {
-            groupsByLevel[lvl].hidden = chosen !== "all" && String(lvl) !== chosen;
-          }
-        };
-        applyLevelFilter();
-        levelFilterSelect.addEventListener("change", applyLevelFilter);
 
         section.createEl("div", {
           cls: "wizard-spell-hint",
           text: q.mode === "prepare"
-            ? "Ctrl/Cmd-click (or shift-click) to select more than one. Spells currently prepared start checked - unchecking one removes it; nothing outside this list is touched."
-            : "Ctrl/Cmd-click (or shift-click) to select more than one. Spells the character already knows start checked - unchecking one removes it; nothing outside this list is touched.",
+            ? "Ctrl/Cmd-click (or shift-click) to select more than one within a level's own list. Spells currently prepared start checked - unchecking one removes it; nothing outside this list is touched."
+            : "Ctrl/Cmd-click (or shift-click) to select more than one within a level's own list. Spells the character already knows start checked - unchecking one removes it; nothing outside this list is touched.",
         });
         const counterEl = section.createEl("div", { cls: "wizard-spell-hint wizard-spell-counter" });
 
-        // Once a class hits its cap - spellsKnownCapFor for a "known"
-        // caster, preparedSpellsCapFor for a "prepare" one - the remaining
-        // unselected LEVELED options dim/disable until one gets unchecked.
-        // 2026-09-23: cantrips now get the same treatment via cantripsCap/
-        // CANTRIPS_KNOWN_TABLE above, per the user's own request - a class
-        // with no cantrips at all (cantripsCap === null, canHaveCantrips
-        // false) simply never has any cantrip <option>s to begin with, so
-        // nothing extra is needed to handle that case here.
+        // One multi-select PER spell level (Cantrips, 1st Level, etc.)
+        // instead of one combined list behind a "Show" filter dropdown -
+        // same change as the Create Character wizard's own copy of this
+        // picker, and for the same reason (every level this class has
+        // access to visible and pickable at once). Once a class hits its
+        // cap - spellsKnownCapFor for a "known" caster, preparedSpellsCapFor
+        // for a "prepare" one, cantripsCap for cantrips regardless of mode -
+        // the remaining unselected options in THAT level's own box dim/
+        // disable until one gets unchecked, the same behavior the old
+        // single select enforced via dataset.level, just scoped per box now.
+        const levelSelects = {};
+        const levelBadges = {};
         const updateSpellCapUI = () => {
-          const selectedLeveled = Array.from(select.selectedOptions).filter((o) => Number(o.dataset.level) > 0).length;
-          const selectedCantrips = Array.from(select.selectedOptions).filter((o) => Number(o.dataset.level) === 0).length;
-          if (spellsKnownCap != null) {
-            const atCap = selectedLeveled >= spellsKnownCap;
-            for (const o of Array.from(select.options)) {
-              if (Number(o.dataset.level) > 0 && !o.selected) o.disabled = atCap;
-            }
+          let selectedCantrips = 0;
+          let selectedLeveled = 0;
+          for (const lvl of availableLevels) {
+            const count = levelSelects[lvl].selectedOptions.length;
+            if (lvl === 0) selectedCantrips += count;
+            else selectedLeveled += count;
+            // Per-card badge: just this level's own count. Leveled spells
+            // (lvl > 0) share ONE combined cap across every leveled card
+            // (see spellsKnownCap below), not a cap of their own per level,
+            // so a leveled card's badge is a plain running count; only the
+            // Cantrips card has a true per-card cap to show a fraction
+            // against.
+            levelBadges[lvl].setText(lvl === 0 && cantripsCap != null ? `${count} / ${cantripsCap}` : `${count} chosen`);
           }
-          if (cantripsCap != null) {
-            const cantripsAtCap = selectedCantrips >= cantripsCap;
-            for (const o of Array.from(select.options)) {
-              if (Number(o.dataset.level) === 0 && !o.selected) o.disabled = cantripsAtCap;
+          for (const lvl of availableLevels) {
+            const cap = lvl === 0 ? cantripsCap : spellsKnownCap;
+            if (cap == null) continue;
+            const selectedOfThisLevel = lvl === 0 ? selectedCantrips : selectedLeveled;
+            const atCap = selectedOfThisLevel >= cap;
+            for (const o of Array.from(levelSelects[lvl].options)) {
+              if (!o.selected) o.disabled = atCap;
             }
           }
           const leveledText =
@@ -13327,12 +16096,47 @@ class OverviewTracker extends MarkdownRenderChild {
             : ` · Cantrips chosen: ${selectedCantrips}`;
           counterEl.setText(leveledText + cantripsText);
         };
-        updateSpellCapUI();
-
-        select.addEventListener("change", () => {
-          rec.spellNames = Array.from(select.selectedOptions).map((o) => o.value);
+        const commitSelections = () => {
+          const chosen = [];
+          for (const lvl of availableLevels) {
+            chosen.push(...Array.from(levelSelects[lvl].selectedOptions).map((o) => o.value));
+          }
+          rec.spellNames = chosen;
           updateSpellCapUI();
-        });
+        };
+        // One collapsible card PER spell level, styled like this wizard's
+        // own Species/Class selection cards - see the Create Character
+        // wizard's identical copy of this block for the full reasoning.
+        // wireSpellLevelAccordion keeps only one level open at a time.
+        const accordionPairs = [];
+        for (const lvl of availableLevels) {
+          const wrap = section.createEl("div", { cls: "wizard-spell-level-card-wrap" });
+          const header = wrap.createEl("div", {
+            cls: "wizard-spell-level-card",
+            attr: { tabindex: "0", role: "button", "aria-label": `${levelLabel(lvl)} spells` },
+          });
+          header.createEl("span", { cls: "wizard-spell-level-name", text: levelLabel(lvl) });
+          const badge = header.createEl("span", { cls: "wizard-spell-level-count" });
+          const chevron = header.createEl("span", { cls: "wizard-spell-level-chevron", text: "›" });
+          const body = wrap.createEl("div", { cls: "wizard-spell-level-body" });
+          levelBadges[lvl] = badge;
+
+          const names = byLevel[lvl].slice().sort((a, b) => a.file.basename.localeCompare(b.file.basename));
+          const select = body.createEl("select", {
+            cls: "wizard-spell-select",
+            attr: { multiple: true, size: String(Math.min(Math.max(names.length, 1), 8)) },
+          });
+          for (const sp of names) {
+            const opt = select.createEl("option", { text: sp.file.basename });
+            opt.value = sp.file.basename;
+            if (preselected.has(sp.file.basename)) opt.selected = true;
+          }
+          select.addEventListener("change", commitSelections);
+          levelSelects[lvl] = select;
+          accordionPairs.push({ wrap, header, body, chevron });
+        }
+        wireSpellLevelAccordion(accordionPairs);
+        commitSelections();
       }
       return true;
     };
@@ -13429,28 +16233,54 @@ class OverviewTracker extends MarkdownRenderChild {
             text: `Ancestry: ${(draft._chosen && draft._chosen[0]) || "(not chosen yet)"} - change this on the Basics page, right after Race.`,
           });
         } else if (choiceDef) {
-          const options = typeof choiceDef.options === "function" ? choiceDef.options({ ...choiceCtx, abilitiesFm: abFm }) : choiceDef.options;
-          const count = typeof choiceDef.count === "function" ? choiceDef.count(choiceCtx) : choiceDef.count;
-          const describeMap = typeof choiceDef.describe === "function" ? choiceDef.describe({ ...choiceCtx, abilitiesFm: abFm }) : choiceDef.describe;
           choiceBlock = listEl.createEl("div", { cls: "feature-desc-block feature-choice-block" });
-          choiceBlock.createEl("div", {
-            cls: "condition-desc",
-            text: `Choose ${count}${choiceDef.hint ? " - " + choiceDef.hint : ""}:`,
-          });
-          const select = choiceBlock.createEl("select", {
-            cls: "feature-choice-select",
-            attr: { multiple: true, size: String(Math.min(options.length, 6)) },
-          });
-          const priorSet = new Set(draft._chosen || []);
-          for (const o of options) {
-            const opt = select.createEl("option", { text: o });
-            opt.value = o;
-            if (priorSet.has(o)) opt.selected = true;
-            if (describeMap && describeMap[o]) opt.title = describeMap[o];
+          if (choiceDef.renderPicker) {
+            // A def can supply its own renderPicker (e.g. "magic initiate" -
+            // see FEATURE_CHOICE_DEFS) instead of the plain options/count
+            // multi-select below, for a choice that needs more structure
+            // than "pick N from one flat list". draft._chosen stays a flat
+            // array of the final picks either way, so nothing downstream
+            // that reads it needs to know which path rendered it.
+            choiceDef.renderPicker(choiceBlock, {
+              ctx: { ...choiceCtx, abilitiesFm: abFm },
+              initialChosen: draft._chosen || [],
+              onChosenChange: (next) => {
+                draft._chosen = next;
+              },
+            });
+          } else {
+            const options = typeof choiceDef.options === "function" ? choiceDef.options({ ...choiceCtx, abilitiesFm: abFm }) : choiceDef.options;
+            const count = typeof choiceDef.count === "function" ? choiceDef.count(choiceCtx) : choiceDef.count;
+            const describeMap = typeof choiceDef.describe === "function" ? choiceDef.describe({ ...choiceCtx, abilitiesFm: abFm }) : choiceDef.describe;
+            choiceBlock.createEl("div", {
+              cls: "condition-desc",
+              text: `Choose ${count}${choiceDef.hint ? " - " + choiceDef.hint : ""}:`,
+            });
+            const select = choiceBlock.createEl("select", {
+              cls: "feature-choice-select",
+              attr: { multiple: true, size: String(Math.min(options.length, 6)) },
+            });
+            const priorSet = new Set(draft._chosen || []);
+            for (const o of options) {
+              const opt = select.createEl("option", { text: o });
+              opt.value = o;
+              if (priorSet.has(o)) opt.selected = true;
+              if (describeMap && describeMap[o]) opt.title = describeMap[o];
+            }
+            // Only shown when this feature actually needs more than one
+            // pick - a count-of-1 choice (Fighting Style, Divine Order,
+            // etc.) never needs the modifier key at all, so telling the
+            // player to hold one would just be confusing/wrong for those.
+            if ((Number(count) || 0) > 1) {
+              choiceBlock.createEl("div", {
+                cls: "feature-choice-hint",
+                text: "Ctrl/Cmd-click (or shift-click) to select more than one.",
+              });
+            }
+            select.addEventListener("change", () => {
+              draft._chosen = Array.from(select.selectedOptions).map((o) => o.value);
+            });
           }
-          select.addEventListener("change", () => {
-            draft._chosen = Array.from(select.selectedOptions).map((o) => o.value);
-          });
         }
 
         delBtn.onclick = () => {
@@ -14025,7 +16855,7 @@ class OverviewTracker extends MarkdownRenderChild {
     renderTabs();
     renderNav();
 
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
   }
 }
 
@@ -14498,7 +17328,7 @@ function renderMechanicEditor(parentEl, holder) {
 }
 
 function openHomebrewClassWizard(existing, onSave) {
-  const overlay = document.createElement("div");
+  const overlay = activeDocument.createElement("div");
   overlay.className = "action-modal-overlay";
   const modal = overlay.createEl("div", { cls: "action-modal action-modal-homebrew" });
   modal.createEl("h3", { text: existing ? "Edit Homebrew Class" : "Add Homebrew Class" });
@@ -14508,6 +17338,23 @@ function openHomebrewClassWizard(existing, onSave) {
   const nameInput = nameRow.createEl("input", { type: "text" });
   nameInput.value = existing ? existing.name : "";
   nameInput.placeholder = "e.g. Alchemist";
+
+  const bookRow = modal.createEl("div", { cls: "action-modal-row" });
+  bookRow.createEl("span", { cls: "action-modal-label", text: "Book (optional)" });
+  const bookInput = bookRow.createEl("input", { type: "text" });
+  bookInput.value = existing ? existing.book || "" : "";
+  bookInput.placeholder = "e.g. Grizelda's Guide to Ghosthunting - leave blank to file under \"Homebrew\"";
+
+  // Shown alongside Hit Die/Primary Ability/Saves/Features on the Create
+  // Character and Update Character wizards' Class page (see
+  // getClassDescription's homebrew fallback) - same "what is this thing"
+  // flavor blurb a built-in class gets from CLASS_DESCRIPTIONS, just
+  // author-written instead of hardcoded.
+  const descBlock = modal.createEl("div", { cls: "feature-desc-block" });
+  descBlock.createEl("span", { cls: "action-modal-label", text: "Description" });
+  const descInput = descBlock.createEl("textarea", { cls: "feature-desc-textarea" });
+  descInput.value = existing ? existing.description || "" : "";
+  descInput.placeholder = "A sentence or two on what this class is about - its theme, its niche in a party.";
 
   const dieRow = modal.createEl("div", { cls: "action-modal-row" });
   dieRow.createEl("span", { cls: "action-modal-label", text: "Hit Die" });
@@ -14533,10 +17380,16 @@ function openHomebrewClassWizard(existing, onSave) {
       errorEl.setText("Please enter a name.");
       return;
     }
-    onSave({ id: (existing && existing.id) || genId(), name, hitDie: Number(dieSelect.value) || 8 });
+    onSave({
+      id: (existing && existing.id) || genId(),
+      name,
+      book: bookInput.value.trim(),
+      description: descInput.value,
+      hitDie: Number(dieSelect.value) || 8,
+    });
     overlay.remove();
   };
-  document.body.appendChild(overlay);
+  activeDocument.body.appendChild(overlay);
 }
 
 // classOptions is the full list of class names (built-in + homebrew) this
@@ -14545,7 +17398,7 @@ function openHomebrewClassWizard(existing, onSave) {
 // offered, same as the existing allClassNamesForSubclass local it already
 // builds for this purpose.
 function openHomebrewSubclassWizard(existing, classOptions, onSave) {
-  const overlay = document.createElement("div");
+  const overlay = activeDocument.createElement("div");
   overlay.className = "action-modal-overlay";
   const modal = overlay.createEl("div", { cls: "action-modal action-modal-homebrew action-modal-wide" });
   modal.createEl("h3", { text: existing ? "Edit Homebrew Subclass" : "Add Homebrew Subclass" });
@@ -14574,6 +17427,22 @@ function openHomebrewSubclassWizard(existing, classOptions, onSave) {
   const nameInput = nameRow.createEl("input", { type: "text" });
   nameInput.value = existing ? existing.name : "";
   nameInput.placeholder = "e.g. Path of the Wrathful Spirit";
+
+  const bookRow = modal.createEl("div", { cls: "action-modal-row" });
+  bookRow.createEl("span", { cls: "action-modal-label", text: "Book (optional)" });
+  const bookInput = bookRow.createEl("input", { type: "text" });
+  bookInput.value = existing ? existing.book || "" : "";
+  bookInput.placeholder = "e.g. Grizelda's Guide to Ghosthunting - leave blank to file under \"Homebrew\"";
+
+  // Shown above "Features at Level X" on the Create Character and Update
+  // Character wizards' Class page once this subclass is chosen (see
+  // getSubclassDescription) - no built-in subclass has ever had this kind
+  // of blurb (see that function's own comment), so this is homebrew-only.
+  const subclassDescBlock = modal.createEl("div", { cls: "feature-desc-block" });
+  subclassDescBlock.createEl("span", { cls: "action-modal-label", text: "Description" });
+  const subclassDescInput = subclassDescBlock.createEl("textarea", { cls: "feature-desc-textarea" });
+  subclassDescInput.value = existing ? existing.description || "" : "";
+  subclassDescInput.placeholder = "A sentence or two on what this subclass is about, before listing its features below.";
 
   modal.createEl("h4", { text: "Subclass Features" });
   const featuresWrap = modal.createEl("div");
@@ -14638,23 +17507,27 @@ function openHomebrewSubclassWizard(existing, classOptions, onSave) {
       id: (existing && existing.id) || genId(),
       className: classSelect.value,
       name,
+      book: bookInput.value.trim(),
+      description: subclassDescInput.value,
       features: features.filter((f) => f.name && f.name.trim()).map((f) => ({ ...f, name: f.name.trim() })),
     });
     overlay.remove();
   };
-  document.body.appendChild(overlay);
+  activeDocument.body.appendChild(overlay);
 }
 
 function openHomebrewRaceWizard(existing, onSave) {
-  const overlay = document.createElement("div");
+  const overlay = activeDocument.createElement("div");
   overlay.className = "action-modal-overlay";
   const modal = overlay.createEl("div", { cls: "action-modal action-modal-homebrew action-modal-wide" });
-  modal.createEl("h3", { text: existing ? "Edit Homebrew Race / Ancestry" : "Add Homebrew Race / Ancestry" });
+  modal.createEl("h3", { text: existing ? "Edit Homebrew Race" : "Add Homebrew Race" });
   modal.createEl("p", {
     cls: "setting-item-description",
     text:
       "Each trait works exactly like a built-in species trait - name it \"Darkvision\" and it'll also update the Senses " +
-      "tab, same as the real thing (see RACE_TRAITS in this plugin's code for the wording that triggers that).",
+      "tab, same as the real thing (see RACE_TRAITS in this plugin's code for the wording that triggers that). To give " +
+      "this race a Draconic Ancestry/Elven Lineage-style sub-choice (pick one of several named options right after " +
+      "Race), use the separate \"+ Add Ancestry\" wizard below instead of a plain trait.",
   });
 
   const nameRow = modal.createEl("div", { cls: "action-modal-row" });
@@ -14662,6 +17535,22 @@ function openHomebrewRaceWizard(existing, onSave) {
   const nameInput = nameRow.createEl("input", { type: "text" });
   nameInput.value = existing ? existing.name : "";
   nameInput.placeholder = "e.g. Nethereese Construct";
+
+  const bookRow = modal.createEl("div", { cls: "action-modal-row" });
+  bookRow.createEl("span", { cls: "action-modal-label", text: "Book (optional)" });
+  const bookInput = bookRow.createEl("input", { type: "text" });
+  bookInput.value = existing ? existing.book || "" : "";
+  bookInput.placeholder = "e.g. Grizelda's Guide to Ghosthunting - leave blank to file under \"Homebrew\"";
+
+  // Shown alongside Speed/Traits on the Create Character and Update
+  // Character wizards' Species page (see getRaceDescription's homebrew
+  // fallback) - same "what is this thing" flavor blurb a built-in race
+  // gets from RACE_DESCRIPTIONS, just author-written instead of hardcoded.
+  const raceDescBlock = modal.createEl("div", { cls: "feature-desc-block" });
+  raceDescBlock.createEl("span", { cls: "action-modal-label", text: "Description" });
+  const raceDescInput = raceDescBlock.createEl("textarea", { cls: "feature-desc-textarea" });
+  raceDescInput.value = existing ? existing.description || "" : "";
+  raceDescInput.placeholder = "A sentence or two on what this species is - its look, its culture, its niche - before listing its traits below.";
 
   modal.createEl("h4", { text: "Traits" });
   const traitsWrap = modal.createEl("div");
@@ -14716,15 +17605,127 @@ function openHomebrewRaceWizard(existing, onSave) {
     onSave({
       id: (existing && existing.id) || genId(),
       name,
+      book: bookInput.value.trim(),
+      description: raceDescInput.value,
       traits: traits.filter((t) => t.name && t.name.trim()).map((t) => ({ ...t, name: t.name.trim() })),
     });
     overlay.remove();
   };
-  document.body.appendChild(overlay);
+  activeDocument.body.appendChild(overlay);
+}
+
+// A separate creation wizard from openHomebrewRaceWizard above, for exactly
+// one thing: attaching a Draconic Ancestry/Elven Lineage/Fiendish Legacy-
+// style sub-choice trait to an EXISTING race (built-in or homebrew), named
+// by `raceOptions` (see the Settings tab's Ancestries section, which passes
+// RACE_OPTIONS + the current homebrewRaces names). Saves into the separate
+// homebrewAncestries list rather than pushing a trait onto that race's own
+// traits array (which wouldn't even be possible for a built-in race, since
+// RACE_TRAITS is a hardcoded table) - getRaceTraits stitches the result
+// back onto the named race as a synthetic trait at read time instead, and
+// findRaceSubChoiceTrait/resolveRaceSubChoice give it the same "dedicated
+// dropdown right after Race" treatment as a built-in Ancestry choice.
+function openHomebrewAncestryWizard(existing, raceOptions, onSave) {
+  const overlay = activeDocument.createElement("div");
+  overlay.className = "action-modal-overlay";
+  const modal = overlay.createEl("div", { cls: "action-modal action-modal-homebrew action-modal-wide" });
+  modal.createEl("h3", { text: existing ? "Edit Homebrew Ancestry" : "Add Homebrew Ancestry" });
+  modal.createEl("p", {
+    cls: "setting-item-description",
+    text:
+      "An Ancestry is a named sub-choice within a race - like Dragonborn's Draconic Ancestry (Black/Blue/Brass/...) or " +
+      "Elf's Elven Lineage (Drow/High Elf/Wood Elf). Pick which race it belongs to, name the trait, and list the " +
+      "options a player can choose between; it'll show up as its own dropdown right after Race on that race's sheet, " +
+      "exactly like the built-in ones do.",
+  });
+
+  const raceRow = modal.createEl("div", { cls: "action-modal-row" });
+  raceRow.createEl("span", { cls: "action-modal-label", text: "Race" });
+  const raceSelect = raceRow.createEl("select");
+  for (const r of raceOptions) {
+    const opt = raceSelect.createEl("option", { text: r });
+    opt.value = r;
+  }
+  if (existing && existing.raceName) raceSelect.value = existing.raceName;
+
+  const nameRow = modal.createEl("div", { cls: "action-modal-row" });
+  nameRow.createEl("span", { cls: "action-modal-label", text: "Trait Name" });
+  const nameInput = nameRow.createEl("input", { type: "text" });
+  nameInput.value = existing ? existing.traitName : "";
+  nameInput.placeholder = "e.g. Draconic Ancestry";
+
+  const bookRow = modal.createEl("div", { cls: "action-modal-row" });
+  bookRow.createEl("span", { cls: "action-modal-label", text: "Book (optional)" });
+  const bookInput = bookRow.createEl("input", { type: "text" });
+  bookInput.value = existing ? existing.book || "" : "";
+  bookInput.placeholder = "e.g. Grizelda's Guide to Ghosthunting - leave blank to file under \"Homebrew\"";
+
+  const descBlock = modal.createEl("div", { cls: "feature-desc-block" });
+  descBlock.createEl("span", { cls: "action-modal-label", text: "Description (shown before a choice is made)" });
+  const descInput = descBlock.createEl("textarea", { cls: "feature-desc-textarea" });
+  descInput.value = (existing && existing.description) || "";
+
+  const hintRow = modal.createEl("div", { cls: "action-modal-row" });
+  hintRow.createEl("span", { cls: "action-modal-label", text: "Hint text (optional)" });
+  const hintInput = hintRow.createEl("input", { type: "text" });
+  hintInput.placeholder = "e.g. pick your dragon type";
+  hintInput.value = (existing && existing.hint) || "";
+
+  modal.createEl("h4", { text: "Options" });
+  const optsWrap = modal.createEl("div");
+  const options = existing ? (existing.options || []).map((o) => ({ ...o })) : [{ label: "", desc: "" }];
+  const renderOptions = () => {
+    optsWrap.empty();
+    options.forEach((o, i) => {
+      const row = optsWrap.createEl("div", { cls: "action-modal-row" });
+      const labelInput = row.createEl("input", { type: "text", cls: "action-modal-name" });
+      labelInput.placeholder = "Option name, e.g. Red";
+      labelInput.value = o.label || "";
+      labelInput.onchange = () => { o.label = labelInput.value; };
+      const descInput2 = row.createEl("input", { type: "text" });
+      descInput2.placeholder = "What it does (optional - shown as a tooltip on the sheet)";
+      descInput2.value = o.desc || "";
+      descInput2.onchange = () => { o.desc = descInput2.value; };
+      const rmBtn = row.createEl("button", { cls: "action-btn", text: "✕" });
+      rmBtn.onclick = () => { options.splice(i, 1); renderOptions(); };
+    });
+  };
+  renderOptions();
+  const addOptBtn = modal.createEl("button", { cls: "action-btn-update", text: "+ Add Option" });
+  addOptBtn.onclick = () => { options.push({ label: "", desc: "" }); renderOptions(); };
+
+  const errorEl = modal.createEl("div", { cls: "homebrew-wizard-error" });
+  const btnRow = modal.createEl("div", { cls: "action-modal-btnrow" });
+  const saveBtn = btnRow.createEl("button", { cls: "action-btn-update", text: "Save" });
+  const cancelBtn = btnRow.createEl("button", { text: "Cancel" });
+  cancelBtn.onclick = () => overlay.remove();
+  saveBtn.onclick = () => {
+    const traitName = nameInput.value.trim();
+    const cleanOptions = options.map((o) => ({ label: (o.label || "").trim(), desc: (o.desc || "").trim() })).filter((o) => o.label);
+    if (!traitName) {
+      errorEl.setText("Please enter a trait name.");
+      return;
+    }
+    if (!cleanOptions.length) {
+      errorEl.setText("Please add at least one option.");
+      return;
+    }
+    onSave({
+      id: (existing && existing.id) || genId(),
+      raceName: raceSelect.value,
+      traitName,
+      book: bookInput.value.trim(),
+      description: descInput.value,
+      hint: hintInput.value.trim(),
+      options: cleanOptions,
+    });
+    overlay.remove();
+  };
+  activeDocument.body.appendChild(overlay);
 }
 
 function openHomebrewFeatureWizard(existing, onSave) {
-  const overlay = document.createElement("div");
+  const overlay = activeDocument.createElement("div");
   overlay.className = "action-modal-overlay";
   const modal = overlay.createEl("div", { cls: "action-modal action-modal-homebrew" });
   modal.createEl("h3", { text: existing ? "Edit Homebrew Feature" : "Add Homebrew Feature" });
@@ -14738,6 +17739,12 @@ function openHomebrewFeatureWizard(existing, onSave) {
   const nameInput = nameRow.createEl("input", { type: "text" });
   nameInput.value = existing ? existing.name : "";
   nameInput.placeholder = "e.g. Boon of the Wandering Spirit";
+
+  const bookRow = modal.createEl("div", { cls: "action-modal-row" });
+  bookRow.createEl("span", { cls: "action-modal-label", text: "Book (optional)" });
+  const bookInput = bookRow.createEl("input", { type: "text" });
+  bookInput.value = existing ? existing.book || "" : "";
+  bookInput.placeholder = "e.g. Grizelda's Guide to Ghosthunting - leave blank to file under \"Homebrew\"";
 
   const descBlock = modal.createEl("div", { cls: "feature-desc-block" });
   descBlock.createEl("span", { cls: "action-modal-label", text: "Description" });
@@ -14761,12 +17768,1037 @@ function openHomebrewFeatureWizard(existing, onSave) {
     onSave({
       id: (existing && existing.id) || genId(),
       name,
+      book: bookInput.value.trim(),
       description: descInput.value,
       mechanic: mechanicHolder.mechanic,
     });
     overlay.remove();
   };
-  document.body.appendChild(overlay);
+  activeDocument.body.appendChild(overlay);
+}
+
+// ---- Homebrew item notes ----
+// A different kind of "homebrew" from the four wizards above: those all
+// write to plugin settings (data.json) and only ever affect the character
+// sheet's own in-memory tables. An item note is a REAL vault file, found
+// the same way every other item note is (tag #Item, scanned by
+// getAllItemNotes/InventoryTracker.getItemPages - never by folder path),
+// so "Link Item" and the Inventory tab's Equip automation work on a
+// homebrew item exactly like an official one the instant it's created.
+// buildHomebrewItemNote below is a straight JS port of claude/plugin/
+// itemgen_common.py's item_note() (the same template every note in the
+// vault's SRD/Rare/Very Rare/Legendary/Artifact libraries was generated
+// from) - kept in sync by hand since one lives in this plugin and the
+// other in a one-off Python script, using the same shape/field order so a
+// homebrew note reads naturally alongside a library one. As of 2026-09-25,
+// per the user's own request, it deliberately adds two things no
+// itemgen_common.py-generated note ever carries: a `- Homebrew` tag and a
+// `source:` field (falling back to the literal string "Homebrew" when the
+// wizard's Source field is left blank) - this is how a homebrew item is
+// told apart from an official SRD/library one at a glance, and official
+// items must never gain either of these.
+const ITEM_ABILITY_OPTIONS = ["", "Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"];
+
+function yamlQuote(s) {
+  return `"${String(s == null ? "" : s).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+function yamlList(items) {
+  return items && items.length ? `[${items.join(", ")}]` : "[]";
+}
+
+// `data` is the plain object openHomebrewItemWizard's Save button builds
+// (see its onSave call below) - this only assembles text, no vault access,
+// so it's easy to eyeball/test on its own (see the Homebrew Race/Ancestry
+// split's own standalone test harness for the same reasoning).
+function buildHomebrewItemNote(data) {
+  const fm = [
+    `Rarity: ${data.rarity}`,
+    "type: object",
+    "tags:",
+    "  - Item",
+    `  - item/${data.rarity.toLowerCase().replace(/\s+/g, "-")}`,
+    "  - Homebrew",
+    `item_category: ${data.category}`,
+    // Homebrew-only field (no itemgen_common.py-generated note ever has
+    // this) - always populated, falling back to the literal "Homebrew"
+    // when the wizard's own Source field was left blank, so it's never
+    // silently missing on a note that's meant to be traceable.
+    `source: ${yamlQuote(data.source || "Homebrew")}`,
+  ];
+  if (data.itemBase) fm.push(`item_base: ${yamlQuote(data.itemBase)}`);
+  fm.push(`requires_attunement: ${data.requiresAttunement ? "true" : "false"}`);
+  fm.push(`attunement_note: ${data.requiresAttunement && data.attunementNote ? yamlQuote(data.attunementNote) : '""'}`);
+
+  if (data.category === "Weapon") {
+    if (data.damageDice) {
+      fm.push(`damage_dice: ${yamlQuote(data.damageDice)}`);
+      if (data.damageType) fm.push(`damage_type: ${data.damageType}`);
+    }
+    if (data.weaponProperties && data.weaponProperties.length) fm.push(`weapon_properties: ${yamlList(data.weaponProperties)}`);
+    if (data.rangeNormal) {
+      fm.push(`range_normal: ${Number(data.rangeNormal) || 0}`);
+      fm.push(`range_long: ${Number(data.rangeLong) || 0}`);
+    }
+    if (data.versatileDice) fm.push(`versatile_dice: ${yamlQuote(data.versatileDice)}`);
+    fm.push(`attack_bonus: ${Number(data.attackBonus) || 0}`);
+    fm.push(`damage_bonus: ${Number(data.damageBonus) || 0}`);
+    if (data.weaponMastery) fm.push(`weapon_mastery: ${data.weaponMastery}`);
+  }
+  if (data.category === "Armor" || data.category === "Shield") {
+    if (data.armorCategory) fm.push(`armor_category: ${data.armorCategory}`);
+    if (data.armorClassBase !== "" && data.armorClassBase != null) fm.push(`armor_class_base: ${Number(data.armorClassBase) || 0}`);
+    if (data.armorClassDexCap !== "" && data.armorClassDexCap != null) fm.push(`armor_class_dex_cap: ${Number(data.armorClassDexCap) || 0}`);
+    fm.push(`armor_class_bonus: ${Number(data.armorClassBonus) || 0}`);
+    if (data.strengthRequirement) fm.push(`strength_requirement: ${Number(data.strengthRequirement) || 0}`);
+    if (data.stealthDisadvantage) fm.push(`stealth_disadvantage: true`);
+  }
+
+  if (data.chargesMax) {
+    fm.push(`charges_max: ${Number(data.chargesMax) || 0}`);
+    fm.push(`charges_current: ${Number(data.chargesMax) || 0}`);
+    if (data.chargesRecharge) fm.push(`charges_recharge: ${yamlQuote(data.chargesRecharge)}`);
+  }
+
+  if (data.specialProperties) fm.push(`special_properties: ${yamlQuote(data.specialProperties)}`);
+
+  const cleanPowers = (data.powers || []).filter((p) => p && p.name && p.name.trim());
+  if (cleanPowers.length) {
+    fm.push("powers:");
+    for (const p of cleanPowers) {
+      fm.push(`  - name: ${yamlQuote(p.name)}`);
+      fm.push(`    action_type: ${yamlQuote(p.actionType || "Action")}`);
+      fm.push(`    charges_cost: ${Number(p.chargesCost) || 0}`);
+      if (p.saveAbility) fm.push(`    save_ability: ${p.saveAbility}`);
+      if (p.saveDc) fm.push(`    save_dc: ${Number(p.saveDc) || 0}`);
+      if (p.damageDice) fm.push(`    damage_dice: ${yamlQuote(p.damageDice)}`);
+      if (p.damageType) fm.push(`    damage_type: ${p.damageType}`);
+      fm.push(`    recharge: ${yamlQuote(p.recharge || "")}`);
+      fm.push(`    effect: ${yamlQuote(p.effect || "")}`);
+    }
+  }
+
+  const frontmatter = fm.join("\n");
+
+  // Same "Category (Base), rarity (requires attunement...)" convention the
+  // rest of the library uses (see item-schema.md's own examples) - best-
+  // effort, same as this plugin's other auto-generated text; easy to
+  // hand-edit in the note afterward if it doesn't read quite right.
+  const categoryLabel = ITEM_CATEGORIES_NEEDING_BASE_NAME.includes(data.category) && data.itemBase
+    ? `${data.category} (${data.itemBase})`
+    : data.category;
+  let subtitle = `${categoryLabel}, ${data.rarity}`.toLowerCase().replace(/^./, (c) => c.toUpperCase());
+  if (data.requiresAttunement) {
+    subtitle += data.attunementNote ? ` (requires attunement ${data.attunementNote})` : " (requires attunement)";
+  }
+
+  const paragraphs = String(data.description || "")
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const bodyText = paragraphs.map((p) => "> " + p.replace(/\n/g, "\n> ")).join("\n>\n");
+
+  const note = `---
+${frontmatter}
+---
+
+
+###### ${data.name}
+_${subtitle}_<span class="sub2">:FasWandMagicSparkles: Magic Item</span>
+___
+
+> [!quote|no-t]
+>![[object.png|right wm-sm]]
+${bodyText}
+<span class="clearfix"></span>
+
+> [!column|flex 3]
+> > [!hint]- LIDÉ
+> > \`\`\`base
+> > properties:
+> >   file.name:
+> >     displayName: Name
+> > views:
+> >   - type: table
+> >     name: Name
+> >     filters:
+> >       and:
+> >         - file.inFolder("Dungeons & Dragons/01. Kampaň/1. Master Plan/NPC")
+> >         - file.hasLink(this.file)
+> > \`\`\`
+>
+>> [!note]- HISTORIE
+> > \`\`\`base
+> > properties:
+> >   file.name:
+> >     displayName: Name
+> > views:
+> >   - type: table
+> >     name: Session Notes
+> >     filters:
+> >       and:
+> >         - file.inFolder("Dungeons & Dragons/01. Kampaň/1. Master Plan/Deník")
+> >         - file.hasLink(this.file)
+> > \`\`\`
+`;
+  return note;
+}
+
+// The "+ Create Homebrew Item Note" wizard. Unlike the four wizards above,
+// there's no persisted list to edit afterward - once the note exists it's
+// just a normal vault file, edited the normal way (open it, change the
+// frontmatter/body by hand). onDone receives the plain data object;
+// createHomebrewItemNote (on the plugin class, below) turns that into an
+// actual file.
+function openHomebrewItemWizard(onDone) {
+  const overlay = activeDocument.createElement("div");
+  overlay.className = "action-modal-overlay";
+  const modal = overlay.createEl("div", { cls: "action-modal action-modal-homebrew action-modal-wide" });
+  modal.createEl("h3", { text: "Create Homebrew Item Note" });
+  modal.createEl("p", {
+    cls: "setting-item-description",
+    text:
+      "Creates a real note in your vault, tagged and formatted the same way as every other item in your library - " +
+      '"Link Item" and the Inventory tab\'s Equip/Attune automation will pick it up immediately, no reload needed.',
+  });
+
+  const row = (label) => {
+    const r = modal.createEl("div", { cls: "action-modal-row" });
+    r.createEl("span", { cls: "action-modal-label", text: label });
+    return r;
+  };
+  const selectOptions = (sel, opts) => {
+    for (const o of opts) {
+      const opt = sel.createEl("option", { text: o || "(none)" });
+      opt.value = o;
+    }
+  };
+
+  const nameInput = row("Name").createEl("input", { type: "text" });
+  nameInput.placeholder = "e.g. Flametongue Dagger";
+
+  const raritySelect = row("Rarity").createEl("select");
+  selectOptions(raritySelect, ITEM_RARITIES);
+
+  const categorySelect = row("Item Category").createEl("select");
+  selectOptions(categorySelect, ITEM_CATEGORIES);
+
+  const baseRow = row("Item Base (optional)");
+  const baseInput = baseRow.createEl("input", { type: "text" });
+  baseInput.placeholder = "e.g. Dagger, Leather Armor";
+
+  const sourceRow = row("Source (optional)");
+  const sourceInput = sourceRow.createEl("input", { type: "text" });
+  sourceInput.placeholder = "e.g. Grizelda's Guide to Ghost Hunting - blank saves as \"Homebrew\"";
+  sourceRow.createEl("span", {
+    cls: "setting-item-description",
+    text: "This note always gets a Homebrew tag and this Source as real frontmatter properties (filterable in Dataview/Bases), unlike your official SRD/library items - so you can tell them apart at a glance.",
+  });
+
+  const attuneRow = row("Requires Attunement");
+  const attuneCheckbox = attuneRow.createEl("input", { type: "checkbox" });
+  const attuneNoteInput = attuneRow.createEl("input", { type: "text" });
+  attuneNoteInput.placeholder = "optional restriction, e.g. by a Druid";
+  const syncAttuneNote = () => { attuneNoteInput.style.display = attuneCheckbox.checked ? "" : "none"; };
+  attuneCheckbox.onchange = syncAttuneNote;
+  syncAttuneNote();
+
+  const descBlock = modal.createEl("div", { cls: "feature-desc-block" });
+  descBlock.createEl("span", { cls: "action-modal-label", text: "Description (blank line = new paragraph)" });
+  const descInput = descBlock.createEl("textarea", { cls: "feature-desc-textarea" });
+
+  const specialRow = row("Special Properties (optional, one line)");
+  const specialInput = specialRow.createEl("input", { type: "text" });
+  specialInput.placeholder = "e.g. Attacks with this weapon ignore resistance to fire damage.";
+
+  // -- Weapon fields (only shown for category === Weapon) --
+  const weaponSection = modal.createEl("div");
+  weaponSection.createEl("h4", { text: "Weapon Details" });
+  const wDiceRow = weaponSection.createEl("div", { cls: "action-modal-row" });
+  wDiceRow.createEl("span", { cls: "action-modal-label", text: "Damage Dice" });
+  const wDiceInput = wDiceRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+  wDiceInput.placeholder = "1d8";
+  const wTypeSelect = wDiceRow.createEl("select");
+  selectOptions(wTypeSelect, ["", "Slashing", "Piercing", "Bludgeoning", "Acid", "Cold", "Fire", "Force", "Lightning", "Necrotic", "Poison", "Psychic", "Radiant", "Thunder"]);
+
+  const wPropsRow = weaponSection.createEl("div", { cls: "action-modal-row" });
+  wPropsRow.createEl("span", { cls: "action-modal-label", text: "Properties (comma-separated)" });
+  const wPropsInput = wPropsRow.createEl("input", { type: "text" });
+  wPropsInput.placeholder = "Finesse, Light, Thrown";
+
+  const wRangeRow = weaponSection.createEl("div", { cls: "action-modal-row" });
+  wRangeRow.createEl("span", { cls: "action-modal-label", text: "Range (normal/long, thrown or ammunition only)" });
+  const wRangeNormalInput = wRangeRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+  wRangeNormalInput.placeholder = "20";
+  const wRangeLongInput = wRangeRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+  wRangeLongInput.placeholder = "60";
+
+  const wVersatileRow = weaponSection.createEl("div", { cls: "action-modal-row" });
+  wVersatileRow.createEl("span", { cls: "action-modal-label", text: "Versatile Dice (optional)" });
+  const wVersatileInput = wVersatileRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+  wVersatileInput.placeholder = "1d10";
+
+  const wBonusRow = weaponSection.createEl("div", { cls: "action-modal-row" });
+  wBonusRow.createEl("span", { cls: "action-modal-label", text: "Attack Bonus / Damage Bonus" });
+  const wAtkBonusInput = wBonusRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+  wAtkBonusInput.value = "0";
+  const wDmgBonusInput = wBonusRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+  wDmgBonusInput.value = "0";
+
+  const wMasteryRow = weaponSection.createEl("div", { cls: "action-modal-row" });
+  wMasteryRow.createEl("span", { cls: "action-modal-label", text: "Weapon Mastery (optional)" });
+  const wMasteryInput = wMasteryRow.createEl("input", { type: "text" });
+  wMasteryInput.placeholder = "e.g. Sap";
+
+  // -- Armor fields (only shown for category === Armor or Shield) --
+  const armorSection = modal.createEl("div");
+  armorSection.createEl("h4", { text: "Armor Details" });
+  const aCatRow = armorSection.createEl("div", { cls: "action-modal-row" });
+  aCatRow.createEl("span", { cls: "action-modal-label", text: "Armor Category" });
+  const aCatSelect = aCatRow.createEl("select");
+  selectOptions(aCatSelect, ["", "Light", "Medium", "Heavy", "Shield"]);
+
+  const aAcRow = armorSection.createEl("div", { cls: "action-modal-row" });
+  aAcRow.createEl("span", { cls: "action-modal-label", text: "AC Base / Dex Cap / Bonus" });
+  const aAcBaseInput = aAcRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+  aAcBaseInput.placeholder = "14";
+  const aDexCapInput = aAcRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+  aDexCapInput.placeholder = "2 (blank = uncapped)";
+  const aAcBonusInput = aAcRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+  aAcBonusInput.value = "0";
+
+  const aStrRow = armorSection.createEl("div", { cls: "action-modal-row" });
+  aStrRow.createEl("span", { cls: "action-modal-label", text: "Strength Requirement (optional)" });
+  const aStrInput = aStrRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+  const aStealthRow = armorSection.createEl("div", { cls: "action-modal-row" });
+  aStealthRow.createEl("span", { cls: "action-modal-label", text: "Stealth Disadvantage" });
+  const aStealthCheckbox = aStealthRow.createEl("input", { type: "checkbox" });
+
+  // -- Charges (any category) --
+  modal.createEl("h4", { text: "Charges (optional)" });
+  const chargesRow = modal.createEl("div", { cls: "action-modal-row" });
+  chargesRow.createEl("span", { cls: "action-modal-label", text: "Max Charges / Recharge" });
+  const chargesMaxInput = chargesRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+  chargesMaxInput.placeholder = "e.g. 3";
+  const chargesRechargeInput = chargesRow.createEl("input", { type: "text" });
+  chargesRechargeInput.placeholder = "e.g. 1d3 at dawn";
+
+  // -- Powers --
+  modal.createEl("h4", { text: "Powers (optional)" });
+  const powersWrap = modal.createEl("div");
+  const powers = [];
+  const renderPowers = () => {
+    powersWrap.empty();
+    powers.forEach((p, idx) => {
+      const box = powersWrap.createEl("div", { cls: "homebrew-feature-box" });
+      const headerRow = box.createEl("div", { cls: "action-modal-row" });
+      headerRow.createEl("span", { cls: "action-modal-label", text: `Power ${idx + 1}` });
+      const rmBtn = headerRow.createEl("button", { cls: "action-btn", text: "✕ Remove Power" });
+      rmBtn.onclick = () => { powers.splice(idx, 1); renderPowers(); };
+
+      const nameRow2 = box.createEl("div", { cls: "action-modal-row" });
+      nameRow2.createEl("span", { cls: "action-modal-label", text: "Name" });
+      const pNameInput = nameRow2.createEl("input", { type: "text" });
+      pNameInput.value = p.name || "";
+      pNameInput.placeholder = "e.g. Boar's Charge";
+      pNameInput.onchange = () => { p.name = pNameInput.value; };
+
+      const actionRow = box.createEl("div", { cls: "action-modal-row" });
+      actionRow.createEl("span", { cls: "action-modal-label", text: "Action Type / Charges Cost" });
+      const pActionInput = actionRow.createEl("input", { type: "text" });
+      pActionInput.value = p.actionType || "";
+      pActionInput.placeholder = "Action, Bonus Action, Passive...";
+      pActionInput.onchange = () => { p.actionType = pActionInput.value; };
+      const pCostInput = actionRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+      pCostInput.value = String(p.chargesCost || 0);
+      pCostInput.title = "How many of the item's shared charges one use costs (0 = doesn't draw from them)";
+      pCostInput.onchange = () => { p.chargesCost = pCostInput.value; };
+
+      const saveRow = box.createEl("div", { cls: "action-modal-row" });
+      saveRow.createEl("span", { cls: "action-modal-label", text: "Save Ability / DC" });
+      const pSaveAbilitySelect = saveRow.createEl("select");
+      selectOptions(pSaveAbilitySelect, ITEM_ABILITY_OPTIONS);
+      pSaveAbilitySelect.value = p.saveAbility || "";
+      pSaveAbilitySelect.onchange = () => { p.saveAbility = pSaveAbilitySelect.value; };
+      const pSaveDcInput = saveRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+      pSaveDcInput.value = p.saveDc || "";
+      pSaveDcInput.onchange = () => { p.saveDc = pSaveDcInput.value; };
+
+      const dmgRow = box.createEl("div", { cls: "action-modal-row" });
+      dmgRow.createEl("span", { cls: "action-modal-label", text: "Damage Dice / Type" });
+      const pDmgDiceInput = dmgRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+      pDmgDiceInput.value = p.damageDice || "";
+      pDmgDiceInput.placeholder = "2d6";
+      pDmgDiceInput.onchange = () => { p.damageDice = pDmgDiceInput.value; };
+      const pDmgTypeSelect = dmgRow.createEl("select");
+      selectOptions(pDmgTypeSelect, ["", "Slashing", "Piercing", "Bludgeoning", "Acid", "Cold", "Fire", "Force", "Lightning", "Necrotic", "Poison", "Psychic", "Radiant", "Thunder"]);
+      pDmgTypeSelect.value = p.damageType || "";
+      pDmgTypeSelect.onchange = () => { p.damageType = pDmgTypeSelect.value; };
+
+      const rechargeRow = box.createEl("div", { cls: "action-modal-row" });
+      rechargeRow.createEl("span", { cls: "action-modal-label", text: "Recharge (if independent of item charges)" });
+      const pRechargeInput = rechargeRow.createEl("input", { type: "text" });
+      pRechargeInput.value = p.recharge || "";
+      pRechargeInput.placeholder = "e.g. 1/Day";
+      pRechargeInput.onchange = () => { p.recharge = pRechargeInput.value; };
+
+      const effectBlock = box.createEl("div", { cls: "feature-desc-block" });
+      effectBlock.createEl("span", { cls: "action-modal-label", text: "Effect (plain-language summary)" });
+      const pEffectInput = effectBlock.createEl("textarea", { cls: "feature-desc-textarea" });
+      pEffectInput.value = p.effect || "";
+      pEffectInput.onchange = () => { p.effect = pEffectInput.value; };
+    });
+  };
+  renderPowers();
+  const addPowerBtn = modal.createEl("button", { cls: "action-btn-update", text: "+ Add Power" });
+  addPowerBtn.onclick = () => { powers.push({ chargesCost: 0 }); renderPowers(); };
+
+  const syncCategoryVisibility = () => {
+    weaponSection.style.display = categorySelect.value === "Weapon" ? "" : "none";
+    armorSection.style.display = categorySelect.value === "Armor" || categorySelect.value === "Shield" ? "" : "none";
+  };
+  categorySelect.onchange = syncCategoryVisibility;
+  syncCategoryVisibility();
+
+  const errorEl = modal.createEl("div", { cls: "homebrew-wizard-error" });
+  const btnRow = modal.createEl("div", { cls: "action-modal-btnrow" });
+  const saveBtn = btnRow.createEl("button", { cls: "action-btn-update", text: "Create" });
+  const cancelBtn = btnRow.createEl("button", { text: "Cancel" });
+  cancelBtn.onclick = () => overlay.remove();
+  saveBtn.onclick = () => {
+    const name = nameInput.value.trim();
+    if (!name) {
+      errorEl.setText("Please enter a name.");
+      return;
+    }
+    const data = {
+      name,
+      rarity: raritySelect.value,
+      category: categorySelect.value,
+      itemBase: baseInput.value.trim(),
+      source: sourceInput.value.trim(),
+      requiresAttunement: attuneCheckbox.checked,
+      attunementNote: attuneNoteInput.value.trim(),
+      description: descInput.value,
+      specialProperties: specialInput.value.trim(),
+      damageDice: wDiceInput.value.trim(),
+      damageType: wTypeSelect.value,
+      weaponProperties: wPropsInput.value.split(",").map((s) => s.trim()).filter(Boolean),
+      rangeNormal: wRangeNormalInput.value.trim(),
+      rangeLong: wRangeLongInput.value.trim(),
+      versatileDice: wVersatileInput.value.trim(),
+      attackBonus: wAtkBonusInput.value.trim(),
+      damageBonus: wDmgBonusInput.value.trim(),
+      weaponMastery: wMasteryInput.value.trim(),
+      armorCategory: aCatSelect.value,
+      armorClassBase: aAcBaseInput.value.trim(),
+      armorClassDexCap: aDexCapInput.value.trim(),
+      armorClassBonus: aAcBonusInput.value.trim(),
+      strengthRequirement: aStrInput.value.trim(),
+      stealthDisadvantage: aStealthCheckbox.checked,
+      chargesMax: chargesMaxInput.value.trim(),
+      chargesRecharge: chargesRechargeInput.value.trim(),
+      powers: powers.map((p) => ({ ...p })),
+    };
+    overlay.remove();
+    onDone(data);
+  };
+  activeDocument.body.appendChild(overlay);
+}
+
+// ---- Homebrew feat notes ----
+// Same "real vault file, not plugin settings" idea as the item notes above,
+// but matching the Rysy (Feats) library's own format instead of the item
+// library's - see FEAT_CATEGORIES for the four category subfolders and
+// getAllFeatNotes (near the top of this file) for the exact "**Label:**"
+// line syntax and #Feat tag this has to reproduce so a homebrew feat is
+// found by the Level Up "Take a Feat instead" picker exactly like an
+// official one. Per the user's own choice when this phase was scoped
+// (full bilingual, matching the library), this always writes both a Czech
+// and an English side, unlike the Item wizard which has no such split.
+//
+// As of 2026-09-25 this also prepends a small YAML frontmatter block - the
+// ONLY thing that distinguishes a homebrew feat note's shape from an
+// official Rysy (Feats) library entry (which has no frontmatter at all) -
+// carrying `tags: [Homebrew]` and a `source:` field, so both are real
+// properties Dataview/Bases can filter on, not just body text. The
+// existing inline `#Feat` tag and body `*Zdroj: ...*` citation line are
+// unchanged (every feat, official or homebrew, still has both); "Homebrew"
+// itself just moved from an inline tag to frontmatter per the user's own
+// request, since Obsidian's tag search treats a frontmatter list tag and
+// an inline hashtag identically for `getAllTags`/`tags.includes("#Feat")`
+// detection either way, so nothing else needed to change to keep the
+// picker's official/homebrew feat lookup working.
+function buildHomebrewFeatNote(data) {
+  const cat = FEAT_CATEGORIES[data.category] || FEAT_CATEGORIES.General;
+  const source = data.source || "Homebrew";
+  const lines = ["---", "tags:", "  - Homebrew", `source: ${yamlQuote(source)}`, "---", ""];
+  lines.push(`# ${data.nameCz} (${data.nameEn})`, "");
+  lines.push(`**Typ:** ${cat.labelCz} *(${cat.labelEn})*`);
+  if (data.prereqCz) lines.push(`**Předpoklad:** ${data.prereqCz}`);
+  lines.push(`**Opakovatelný:** ${data.repeatable ? "Ano" : "Ne"}`);
+  if (data.asiCz) lines.push(`**Zvýšení vlastnosti:** ${data.asiCz}`);
+  lines.push("");
+  lines.push(String(data.descriptionCz || "").trim());
+  lines.push("");
+  lines.push(`*Zdroj: ${source}*`);
+  lines.push("");
+  lines.push("#Feat");
+  lines.push("");
+  lines.push("---");
+  lines.push("## English");
+  lines.push("");
+  if (data.prereqEn) lines.push(`**Prerequisite:** ${data.prereqEn}`);
+  lines.push("");
+  lines.push(String(data.descriptionEn || "").trim());
+  lines.push("");
+  return lines.join("\n");
+}
+
+// The "+ Create Homebrew Feat Note" wizard. Like the Item wizard, there's
+// no persisted list to edit afterward - once the note exists it's just a
+// normal vault file (open it, edit it by hand like any other feat note).
+// onDone receives the plain data object; createHomebrewFeatNote (on the
+// plugin class, below) turns that into an actual file.
+function openHomebrewFeatWizard(onDone) {
+  const overlay = activeDocument.createElement("div");
+  overlay.className = "action-modal-overlay";
+  const modal = overlay.createEl("div", { cls: "action-modal action-modal-homebrew action-modal-wide" });
+  modal.createEl("h3", { text: "Create Homebrew Feat Note" });
+  modal.createEl("p", {
+    cls: "setting-item-description",
+    text:
+      "Creates a real bilingual note in your vault, formatted and tagged exactly like every other feat in your " +
+      'library - the Level Up "Take a Feat instead" picker will offer it immediately, no reload needed.',
+  });
+
+  const row = (label) => {
+    const r = modal.createEl("div", { cls: "action-modal-row" });
+    r.createEl("span", { cls: "action-modal-label", text: label });
+    return r;
+  };
+
+  const nameCzInput = row("Name (Czech)").createEl("input", { type: "text" });
+  nameCzInput.placeholder = "e.g. Arkánní Spiritualista";
+  const nameEnInput = row("Name (English)").createEl("input", { type: "text" });
+  nameEnInput.placeholder = "e.g. Arcane Spiritualist";
+
+  const categorySelect = row("Category").createEl("select");
+  for (const key of Object.keys(FEAT_CATEGORIES)) {
+    const opt = categorySelect.createEl("option", { text: `${FEAT_CATEGORIES[key].labelEn} (${FEAT_CATEGORIES[key].labelCz})` });
+    opt.value = key;
+  }
+
+  const prereqCzInput = row("Prerequisite (Czech, optional)").createEl("input", { type: "text" });
+  prereqCzInput.placeholder = "e.g. Úroveň 4+; Síla 13+ nebo Obratnost 13+";
+  const prereqEnInput = row("Prerequisite (English, optional)").createEl("input", { type: "text" });
+  prereqEnInput.placeholder = "e.g. Level 4+; Strength 13+ or Dexterity 13+";
+
+  const repeatRow = row("Repeatable");
+  const repeatCheckbox = repeatRow.createEl("input", { type: "checkbox" });
+
+  const asiRow = row("Ability Score Increase (Czech, optional)");
+  const asiInput = asiRow.createEl("input", { type: "text" });
+  asiInput.placeholder = "e.g. +1 Inteligence, Moudrost nebo Charisma (max. 20)";
+  asiRow.createEl("span", {
+    cls: "setting-item-description",
+    text: "General Feats grant an ability score increase; Origin/Fighting Style/Epic Boon feats usually leave this blank.",
+  });
+
+  const descCzBlock = modal.createEl("div", { cls: "feature-desc-block" });
+  descCzBlock.createEl("span", { cls: "action-modal-label", text: "Description (Czech)" });
+  const descCzInput = descCzBlock.createEl("textarea", { cls: "feature-desc-textarea" });
+
+  const descEnBlock = modal.createEl("div", { cls: "feature-desc-block" });
+  descEnBlock.createEl("span", { cls: "action-modal-label", text: "Description (English)" });
+  const descEnInput = descEnBlock.createEl("textarea", { cls: "feature-desc-textarea" });
+
+  const sourceRow = row("Source (optional)");
+  const sourceInput = sourceRow.createEl("input", { type: "text" });
+  sourceInput.placeholder = "e.g. Grizelda's Guide to Ghost Hunting - blank saves as \"Homebrew\"";
+  sourceRow.createEl("span", {
+    cls: "setting-item-description",
+    text: "This note always gets a Homebrew tag and this Source as real frontmatter properties (filterable in Dataview/Bases), unlike your official Rysy (Feats) library entries - so you can tell them apart at a glance.",
+  });
+
+  const errorEl = modal.createEl("div", { cls: "homebrew-wizard-error" });
+  const btnRow = modal.createEl("div", { cls: "action-modal-btnrow" });
+  const saveBtn = btnRow.createEl("button", { cls: "action-btn-update", text: "Create" });
+  const cancelBtn = btnRow.createEl("button", { text: "Cancel" });
+  cancelBtn.onclick = () => overlay.remove();
+  saveBtn.onclick = () => {
+    const nameCz = nameCzInput.value.trim();
+    const nameEn = nameEnInput.value.trim();
+    if (!nameCz || !nameEn) {
+      errorEl.setText("Please enter both a Czech and an English name.");
+      return;
+    }
+    const data = {
+      nameCz,
+      nameEn,
+      category: categorySelect.value,
+      prereqCz: prereqCzInput.value.trim(),
+      prereqEn: prereqEnInput.value.trim(),
+      repeatable: repeatCheckbox.checked,
+      asiCz: asiInput.value.trim(),
+      descriptionCz: descCzInput.value,
+      descriptionEn: descEnInput.value,
+      source: sourceInput.value.trim(),
+    };
+    overlay.remove();
+    onDone(data);
+  };
+  activeDocument.body.appendChild(overlay);
+}
+
+function buildHomebrewMonsterNote(data) {
+  const type = data.type || "Humanoid";
+  const fm = [`Type: ${type}`, `CR: ${data.cr || "0"}`, `Size: ${data.size || "Medium"}`, "tags:", "  - Monster", `  - ${type}`, "  - Homebrew"];
+  // Same "always populated, falling back to the literal Homebrew" reasoning
+  // as buildHomebrewItemNote's own source field above - never silently
+  // missing on a note that's meant to be traceable.
+  fm.push(`source: ${yamlQuote(data.source || "Homebrew")}`);
+  const frontmatter = fm.join("\n");
+
+  const sb = [`name: ${data.name}`, `size: ${data.size || "Medium"}`, `type: ${type}`];
+  if (data.alignment) sb.push(`alignment: ${data.alignment}`);
+  if (data.ac) sb.push(`ac: ${data.ac}`);
+  sb.push(`hp: ${Number(data.hp) || 0}`);
+  if (data.hitDice) sb.push(`hit_dice: ${data.hitDice}`);
+  if (data.speed) sb.push(`speed: ${data.speed}`);
+  const stats = Array.isArray(data.stats) && data.stats.length === 6 ? data.stats : [10, 10, 10, 10, 10, 10];
+  sb.push(`stats: [${stats.map((n) => Number(n) || 10).join(", ")}]`);
+
+  const cleanSaves = (data.saves || []).filter((s) => s && String(s.bonus || "").trim() !== "");
+  if (cleanSaves.length) {
+    sb.push("saves:");
+    for (const s of cleanSaves) sb.push(`  - ${s.name}: ${s.bonus}`);
+  }
+  const cleanSkills = (data.skills || []).filter((s) => s && String(s.bonus || "").trim() !== "");
+  if (cleanSkills.length) {
+    sb.push("skillsaves:");
+    for (const s of cleanSkills) sb.push(`  - ${s.name}: ${s.bonus}`);
+  }
+
+  if (data.damageVulnerabilities) sb.push(`damage_vulnerabilities: ${data.damageVulnerabilities}`);
+  if (data.damageResistances) sb.push(`damage_resistances: ${data.damageResistances}`);
+  if (data.damageImmunities) sb.push(`damage_immunities: ${data.damageImmunities}`);
+  if (data.conditionImmunities) sb.push(`condition_immunities: ${data.conditionImmunities}`);
+  if (data.senses) sb.push(`senses: ${data.senses}`);
+  if (data.languages) sb.push(`languages: ${data.languages}`);
+  sb.push(`cr: ${data.cr || "0"}`);
+
+  const pushEntryList = (key, list) => {
+    const clean = (list || []).filter((e) => e && e.name && e.name.trim());
+    if (!clean.length) return;
+    sb.push(`${key}:`);
+    for (const e of clean) {
+      sb.push(`  - name: ${e.name.trim()}`);
+      sb.push(`    desc: ${yamlQuote(e.desc || "")}`);
+    }
+  };
+  pushEntryList("traits", data.traits);
+  pushEntryList("actions", data.actions);
+  pushEntryList("bonus_actions", data.bonusActions);
+  pushEntryList("reactions", data.reactions);
+  pushEntryList("legendaryactions", data.legendaryActions);
+
+  const statblock = sb.join("\n");
+  const flavor = String(data.flavorText || "").trim();
+
+  return `---
+${frontmatter}
+---
+
+${flavor ? flavor + "\n" : ""}\`\`\`statblock
+${statblock}
+\`\`\`
+
+#Monster
+`;
+}
+
+// The "+ Create Homebrew Monster Note" wizard. Same "creates a real vault
+// note, no persisted settings list to edit afterward" shape as the Item/Feat
+// wizards above (once the note exists it's just a normal file, edited the
+// normal way) - onDone receives the plain data object; createHomebrewMonsterNote
+// (on the plugin class, below) turns that into an actual file via
+// buildHomebrewMonsterNote above. Every field here mirrors what this vault's
+// own hand-written monster notes actually use (see the real examples under
+// "04. Kniha příšer/Homebrew Příšery/") rather than the full obsidian-5e-
+// statblocks schema - mythic actions/lair actions/regional effects/a
+// structured spells block don't appear in a single one of this vault's own
+// monsters (Spellcasting is always just written as a Trait, e.g. "Kel'Zier"
+// or "Accursed Guard"), so leaving them out keeps this wizard matched to how
+// this vault actually builds a monster instead of a generic superset.
+function openHomebrewMonsterWizard(onDone) {
+  const overlay = activeDocument.createElement("div");
+  overlay.className = "action-modal-overlay";
+  const modal = overlay.createEl("div", { cls: "action-modal action-modal-homebrew action-modal-wide" });
+  modal.createEl("h3", { text: "Create Homebrew Monster Note" });
+  modal.createEl("p", {
+    cls: "setting-item-description",
+    text:
+      "Creates a real note in your vault, tagged and formatted the same way as every other monster in your bestiary " +
+      '(the same "obsidian-5e-statblocks" codeblock convention) - "Link Creature" and the Creatures tab will pick it ' +
+      "up immediately, no reload needed.",
+  });
+
+  const row = (label) => {
+    const r = modal.createEl("div", { cls: "action-modal-row" });
+    r.createEl("span", { cls: "action-modal-label", text: label });
+    return r;
+  };
+  const selectOptions = (sel, opts) => {
+    for (const o of opts) {
+      const opt = sel.createEl("option", { text: o || "(none)" });
+      opt.value = o;
+    }
+  };
+
+  const nameInput = row("Name").createEl("input", { type: "text" });
+  nameInput.placeholder = "e.g. Accursed Guard";
+
+  const sizeSelect = row("Size").createEl("select");
+  selectOptions(sizeSelect, MONSTER_SIZES);
+  sizeSelect.value = "Medium";
+
+  const typeSelect = row("Type").createEl("select");
+  selectOptions(typeSelect, MONSTER_TYPES);
+  typeSelect.value = "Humanoid";
+
+  const alignmentInput = row("Alignment").createEl("input", { type: "text" });
+  alignmentInput.placeholder = "e.g. Chaotic Evil, Unaligned, any alignment";
+
+  const crInput = row("Challenge Rating").createEl("input", { type: "text", cls: "action-modal-narrow" });
+  crInput.placeholder = "e.g. 1/8, 1/2, 5, 20";
+
+  const sourceRow = row("Source (optional)");
+  const sourceInput = sourceRow.createEl("input", { type: "text" });
+  sourceInput.placeholder = "e.g. Grizelda's Guide to Ghost Hunting - blank saves as \"Homebrew\"";
+  sourceRow.createEl("span", {
+    cls: "setting-item-description",
+    text: "This note always gets a Homebrew tag and this Source as real frontmatter properties (filterable in Dataview/Bases), unlike an official bestiary monster.",
+  });
+
+  modal.createEl("h4", { text: "Combat Stats" });
+  const acRow = row("Armor Class");
+  const acInput = acRow.createEl("input", { type: "text" });
+  acInput.placeholder = "e.g. 18 (natural armor)";
+
+  const hpRow = row("Hit Points / Hit Dice");
+  const hpInput = hpRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+  hpInput.placeholder = "142";
+  const hitDiceInput = hpRow.createEl("input", { type: "text" });
+  hitDiceInput.placeholder = "19d8 + 57";
+
+  const speedRow = row("Speed");
+  const speedInput = speedRow.createEl("input", { type: "text" });
+  speedInput.placeholder = "e.g. 30 ft., fly 60 ft. (hover)";
+
+  modal.createEl("h4", { text: "Ability Scores" });
+  const abilityRow = modal.createEl("div", { cls: "action-modal-row" });
+  const ABILITY_SCORE_LABELS = ["STR", "DEX", "CON", "INT", "WIS", "CHA"];
+  const abilityInputs = ABILITY_SCORE_LABELS.map((label) => {
+    abilityRow.createEl("span", { cls: "action-modal-label", text: label });
+    const inp = abilityRow.createEl("input", { type: "text", cls: "action-modal-narrow" });
+    inp.value = "10";
+    return inp;
+  });
+
+  // Shared list-editor builder for the two "ability/skill + bonus" lists
+  // (Saving Throws/Skills) - a select (from optionNames) paired with a
+  // free-text bonus input (free text, not a number input, since a homebrew
+  // monster's save/skill bonus is typed straight off a printed stat block
+  // rather than computed - e.g. "+7", matching every real example's own
+  // "- Dex: 4" style).
+  const buildBonusListEditor = (heading, addLabel, items, optionNames) => {
+    modal.createEl("h4", { text: heading });
+    const wrap = modal.createEl("div");
+    const render = () => {
+      wrap.empty();
+      items.forEach((entry, idx) => {
+        const r = wrap.createEl("div", { cls: "action-modal-row" });
+        const sel = r.createEl("select", { cls: "action-modal-name" });
+        selectOptions(sel, optionNames);
+        sel.value = entry.name;
+        sel.onchange = () => { entry.name = sel.value; };
+        const bonusInput = r.createEl("input", { type: "text", cls: "action-modal-narrow" });
+        bonusInput.placeholder = "+0";
+        bonusInput.value = entry.bonus || "";
+        bonusInput.onchange = () => { entry.bonus = bonusInput.value; };
+        const rmBtn = r.createEl("button", { cls: "action-btn", text: "✕" });
+        rmBtn.onclick = () => { items.splice(idx, 1); render(); };
+      });
+    };
+    render();
+    const addBtn = modal.createEl("button", { cls: "action-btn-update", text: addLabel });
+    addBtn.onclick = () => { items.push({ name: optionNames[0], bonus: "" }); render(); };
+  };
+  const saves = [];
+  const skills = [];
+  buildBonusListEditor("Saving Throws (optional)", "+ Add Saving Throw", saves, MONSTER_SAVE_ABILITIES);
+  buildBonusListEditor("Skills (optional)", "+ Add Skill", skills, STANDARD_SKILLS.map((s) => s.name));
+
+  modal.createEl("h4", { text: "Damages & Senses" });
+  const vulnInput = row("Damage Vulnerabilities (optional)").createEl("input", { type: "text" });
+  const resistInput = row("Damage Resistances (optional)").createEl("input", { type: "text" });
+  resistInput.placeholder = "e.g. bludgeoning, piercing, and slashing from nonmagical attacks";
+  const immuneInput = row("Damage Immunities (optional)").createEl("input", { type: "text" });
+  const condImmuneRow = row("Condition Immunities (optional)");
+  const condImmuneInput = condImmuneRow.createEl("input", { type: "text" });
+  condImmuneRow.createEl("span", {
+    cls: "setting-item-description",
+    text: 'Plain text is fine, or paste real vault wikilinks (e.g. "[[Vystrašený (Frightened)|Frightened]]") to match how this vault\'s other bestiary notes cross-link conditions.',
+  });
+  const sensesRow = row("Senses");
+  const sensesInput = sensesRow.createEl("input", { type: "text" });
+  sensesInput.placeholder = "e.g. Darkvision 120 ft., Passive Perception 18";
+  const languagesInput = row("Languages").createEl("input", { type: "text" });
+  languagesInput.placeholder = "e.g. Common, telepathy 300 ft., or None";
+
+  // Shared list-editor builder for the four "name + description" lists
+  // (Traits/Actions/Bonus Actions/Reactions/Legendary Actions) - desc is a
+  // full textarea, not a single-line input, since real stat-block entries
+  // routinely run several sentences (attack rolls, save DCs, damage) - see
+  // buildHomebrewMonsterNote's own comment for why desc always gets
+  // yamlQuote()-d on the way out but name doesn't.
+  const buildEntryListEditor = (heading, addLabel, items, descPlaceholder) => {
+    modal.createEl("h4", { text: heading });
+    const wrap = modal.createEl("div");
+    const render = () => {
+      wrap.empty();
+      items.forEach((entry, idx) => {
+        const box = wrap.createEl("div", { cls: "homebrew-feature-box" });
+        const headerRow = box.createEl("div", { cls: "action-modal-row" });
+        const nameInp = headerRow.createEl("input", { type: "text", cls: "action-modal-name" });
+        nameInp.placeholder = "Name, e.g. Multiattack";
+        nameInp.value = entry.name || "";
+        nameInp.onchange = () => { entry.name = nameInp.value; };
+        const rmBtn = headerRow.createEl("button", { cls: "action-btn", text: "✕ Remove" });
+        rmBtn.onclick = () => { items.splice(idx, 1); render(); };
+
+        const descBlock = box.createEl("div", { cls: "feature-desc-block" });
+        const descInp = descBlock.createEl("textarea", { cls: "feature-desc-textarea" });
+        descInp.placeholder = descPlaceholder;
+        descInp.value = entry.desc || "";
+        descInp.onchange = () => { entry.desc = descInp.value; };
+      });
+    };
+    render();
+    const addBtn = modal.createEl("button", { cls: "action-btn-update", text: addLabel });
+    addBtn.onclick = () => { items.push({ name: "", desc: "" }); render(); };
+  };
+  const traits = [];
+  const actions = [{ name: "", desc: "" }];
+  const bonusActions = [];
+  const reactions = [];
+  const legendaryActions = [];
+  buildEntryListEditor(
+    "Traits (optional)",
+    "+ Add Trait",
+    traits,
+    'e.g. "Magic Resistance. The creature has advantage on saving throws against spells and other magical effects."'
+  );
+  buildEntryListEditor(
+    "Actions",
+    "+ Add Action",
+    actions,
+    'e.g. "_Melee Attack:_ +8 to hit, reach 5 ft. _Hit:_ 14 (2d8 + 5) piercing damage."'
+  );
+  buildEntryListEditor("Bonus Actions (optional)", "+ Add Bonus Action", bonusActions, "e.g. \"The creature moves up to half its speed without provoking opportunity attacks.\"");
+  buildEntryListEditor("Reactions (optional)", "+ Add Reaction", reactions, 'e.g. "When a creature the monster can see moves within 5 ft. of it, it can make one melee attack against that creature."');
+  buildEntryListEditor(
+    "Legendary Actions (optional)",
+    "+ Add Legendary Action",
+    legendaryActions,
+    'e.g. "The creature moves up to its speed without provoking opportunity attacks."'
+  );
+
+  modal.createEl("h4", { text: "Flavor Text (optional)" });
+  const flavorBlock = modal.createEl("div", { cls: "feature-desc-block" });
+  const flavorInput = flavorBlock.createEl("textarea", { cls: "feature-desc-textarea" });
+  flavorInput.placeholder = "A sentence or two of flavor, shown above the stat block on the note.";
+
+  const errorEl = modal.createEl("div", { cls: "homebrew-wizard-error" });
+  const btnRow = modal.createEl("div", { cls: "action-modal-btnrow" });
+  const saveBtn = btnRow.createEl("button", { cls: "action-btn-update", text: "Save" });
+  const cancelBtn = btnRow.createEl("button", { text: "Cancel" });
+  cancelBtn.onclick = () => overlay.remove();
+  saveBtn.onclick = () => {
+    const name = nameInput.value.trim();
+    if (!name) {
+      errorEl.setText("Please enter a name.");
+      return;
+    }
+    const data = {
+      name,
+      source: sourceInput.value.trim(),
+      size: sizeSelect.value,
+      type: typeSelect.value,
+      alignment: alignmentInput.value.trim(),
+      cr: crInput.value.trim(),
+      ac: acInput.value.trim(),
+      hp: hpInput.value.trim(),
+      hitDice: hitDiceInput.value.trim(),
+      speed: speedInput.value.trim(),
+      stats: abilityInputs.map((i) => Number(i.value) || 10),
+      saves,
+      skills,
+      damageVulnerabilities: vulnInput.value.trim(),
+      damageResistances: resistInput.value.trim(),
+      damageImmunities: immuneInput.value.trim(),
+      conditionImmunities: condImmuneInput.value.trim(),
+      senses: sensesInput.value.trim(),
+      languages: languagesInput.value.trim(),
+      traits,
+      actions,
+      bonusActions,
+      reactions,
+      legendaryActions,
+      flavorText: flavorInput.value,
+    };
+    overlay.remove();
+    onDone(data);
+  };
+  activeDocument.body.appendChild(overlay);
+}
+
+// A homebrew background, unlike the wizards above, doesn't create a note or
+// a Features-list entry directly - it feeds getBackgroundData/
+// getAllBackgroundOptions, the exact same lookup the built-in
+// BACKGROUND_DATA_2024 table feeds, so it shows up as a real choice in the
+// Create Character wizard's Background picker with its own working Ability
+// Bonus panel and auto-checked skills, right alongside the 16 official
+// backgrounds. allFeatNames (the vault's current Rysy (Feats) library, via
+// getAllFeatNotes - fetched once by the Settings tab caller, same as
+// classOptions/raceOptions above) only powers the Feat field's autocomplete
+// suggestions - it stays a plain text field since a background's Origin
+// Feat doesn't have to exist in this vault yet to be saved (see
+// getBackgroundExtraFeatures' own fallback for a not-yet-present feat).
+function openHomebrewBackgroundWizard(existing, allFeatNames, onSave) {
+  const overlay = activeDocument.createElement("div");
+  overlay.className = "action-modal-overlay";
+  const modal = overlay.createEl("div", { cls: "action-modal action-modal-homebrew action-modal-wide" });
+  modal.createEl("h3", { text: existing ? "Edit Homebrew Background" : "Add Homebrew Background" });
+  modal.createEl("p", {
+    cls: "setting-item-description",
+    text:
+      "Matches the shape every official 2024 background uses: an Ability Bonus split among exactly 3 abilities, " +
+      "exactly 2 skill proficiencies, and one optional tool proficiency plus one optional Origin Feat - leave " +
+      "either of those last two blank if the background you're recreating doesn't specify one.",
+  });
+
+  const ABILITY_KEYS = ["str", "dex", "con", "int", "wis", "cha"];
+  const ABILITY_LABELS = { str: "Strength", dex: "Dexterity", con: "Constitution", int: "Intelligence", wis: "Wisdom", cha: "Charisma" };
+
+  const nameRow = modal.createEl("div", { cls: "action-modal-row" });
+  nameRow.createEl("span", { cls: "action-modal-label", text: "Name" });
+  const nameInput = nameRow.createEl("input", { type: "text" });
+  nameInput.value = existing ? existing.name : "";
+  nameInput.placeholder = "e.g. Ghost Hunter";
+
+  const bookRow = modal.createEl("div", { cls: "action-modal-row" });
+  bookRow.createEl("span", { cls: "action-modal-label", text: "Book (optional)" });
+  const bookInput = bookRow.createEl("input", { type: "text" });
+  bookInput.value = existing ? existing.book || "" : "";
+  bookInput.placeholder = "e.g. Grizelda's Guide to Ghosthunting - leave blank to file under \"Homebrew\"";
+
+  // Shown under the Background dropdown on the Create Character wizard
+  // (see the backgroundDescStatus block in buildCharSheetFields) - same
+  // "homebrew-only, no built-in equivalent" status as getSubclassDescription/
+  // getRaceDescription's homebrew fallback.
+  const descBlock = modal.createEl("div", { cls: "feature-desc-block" });
+  descBlock.createEl("span", { cls: "action-modal-label", text: "Description" });
+  const descInput = descBlock.createEl("textarea", { cls: "feature-desc-textarea" });
+  descInput.value = existing ? existing.description || "" : "";
+  descInput.placeholder = "A sentence or two on who takes this background and why, before the mechanical details below.";
+
+  modal.createEl("h4", { text: "Ability Bonus (choose 3 different abilities)" });
+  const abilityRow = modal.createEl("div", { cls: "action-modal-row" });
+  const existingAbilities = existing && Array.isArray(existing.abilities) && existing.abilities.length === 3
+    ? existing.abilities
+    : ["str", "dex", "con"];
+  const abilitySelects = existingAbilities.map((ab, i) => {
+    abilityRow.createEl("span", { cls: "action-modal-label", text: i === 0 ? "Abilities" : "" });
+    const sel = abilityRow.createEl("select", { cls: "action-modal-name" });
+    for (const key of ABILITY_KEYS) {
+      const opt = sel.createEl("option", { text: ABILITY_LABELS[key] });
+      opt.value = key;
+    }
+    sel.value = ab;
+    return sel;
+  });
+
+  modal.createEl("h4", { text: "Skill Proficiencies (choose 2 different skills)" });
+  const skillRow = modal.createEl("div", { cls: "action-modal-row" });
+  const existingSkills = existing && Array.isArray(existing.skills) && existing.skills.length === 2
+    ? existing.skills
+    : [STANDARD_SKILLS[0].name, STANDARD_SKILLS[1].name];
+  const skillSelects = existingSkills.map((sk, i) => {
+    skillRow.createEl("span", { cls: "action-modal-label", text: i === 0 ? "Skills" : "" });
+    const sel = skillRow.createEl("select", { cls: "action-modal-name" });
+    for (const s of STANDARD_SKILLS) {
+      const opt = sel.createEl("option", { text: `${s.name} (${s.ability})` });
+      opt.value = s.name;
+    }
+    sel.value = sk;
+    return sel;
+  });
+
+  const toolRow = modal.createEl("div", { cls: "action-modal-row" });
+  toolRow.createEl("span", { cls: "action-modal-label", text: "Tool Proficiency (optional)" });
+  const toolInput = toolRow.createEl("input", { type: "text" });
+  toolInput.value = existing ? existing.tool || "" : "";
+  toolInput.placeholder = "e.g. Thieves' Tools - leave blank if this background grants none";
+
+  const featRow = modal.createEl("div", { cls: "action-modal-row" });
+  featRow.createEl("span", { cls: "action-modal-label", text: "Origin Feat (optional)" });
+  const featListId = `homebrew-bg-feat-list-${genId()}`;
+  const featInput = featRow.createEl("input", {
+    type: "text",
+    attr: allFeatNames && allFeatNames.length ? { list: featListId } : {},
+  });
+  featInput.value = existing ? existing.feat || "" : "";
+  featInput.placeholder = "e.g. Alert - must match a feat's English name exactly to link up; leave blank for none";
+  if (allFeatNames && allFeatNames.length) {
+    const datalist = modal.createEl("datalist", { attr: { id: featListId } });
+    for (const n of allFeatNames) datalist.createEl("option", { attr: { value: n } });
+  }
+
+  const errorEl = modal.createEl("div", { cls: "homebrew-wizard-error" });
+  const btnRow = modal.createEl("div", { cls: "action-modal-btnrow" });
+  const saveBtn = btnRow.createEl("button", { cls: "action-btn-update", text: "Save" });
+  const cancelBtn = btnRow.createEl("button", { text: "Cancel" });
+  cancelBtn.onclick = () => overlay.remove();
+  saveBtn.onclick = () => {
+    const name = nameInput.value.trim();
+    if (!name) {
+      errorEl.setText("Please enter a name.");
+      return;
+    }
+    const abilities = abilitySelects.map((s) => s.value);
+    if (new Set(abilities).size !== 3) {
+      errorEl.setText("Please choose 3 different abilities.");
+      return;
+    }
+    const skills = skillSelects.map((s) => s.value);
+    if (new Set(skills).size !== 2) {
+      errorEl.setText("Please choose 2 different skills.");
+      return;
+    }
+    onSave({
+      id: (existing && existing.id) || genId(),
+      name,
+      book: bookInput.value.trim(),
+      description: descInput.value,
+      abilities,
+      skills,
+      tool: toolInput.value.trim(),
+      feat: featInput.value.trim(),
+    });
+    overlay.remove();
+  };
+  activeDocument.body.appendChild(overlay);
 }
 
 // Small modal used by the ribbon "New Character" button to ask for a
@@ -14804,6 +18836,154 @@ class Dnd2024SettingTab extends PluginSettingTab {
           });
       });
 
+    new Setting(containerEl)
+      .setName("Item library folder")
+      .setDesc(
+        'Where Homebrew Content > Items\' "+ Create Homebrew Item Note" wizard files new item notes - each one ' +
+          'lands in a rarity subfolder underneath (e.g. "<this>/Rare/Flame Tongue.md"), matching the official item ' +
+          "library's own layout so homebrew items sit right alongside official ones."
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("e.g. Dungeons & Dragons/06. Tradice, Frakce & Předměty/Předměty")
+          .setValue(this.plugin.settings.itemLibraryFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.itemLibraryFolder = value.replace(/\/+$/, "").trim();
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Feat library folder")
+      .setDesc(
+        'Where Homebrew Content > Feats\' "+ Create Homebrew Feat Note" wizard files new feat notes - point this ' +
+          "at the folder that directly CONTAINS the four category subfolders (Obecné rysy, Bojové rysy, Epické " +
+          'dary, Počáteční rysy) - each new feat lands in the right one automatically (e.g. "<this>/Obecné rysy ' +
+          '(General Feats)/Rys (Feat).md"), matching the official Rysy (Feats) library\'s own layout.'
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("e.g. Dungeons & Dragons/02. Pravidla/Oficiální pravidla D&D/Rysy (Feats)")
+          .setValue(this.plugin.settings.featLibraryFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.featLibraryFolder = value.replace(/\/+$/, "").trim();
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName("Monster library folder")
+      .setDesc(
+        'Where Homebrew Content > Monsters\' "+ Create Homebrew Monster Note" wizard files new monster notes - ' +
+          "all homebrew monsters are filed flat into this one folder regardless of type, matching this vault's " +
+          "own \"Homebrew Příšery\"-style bestiary layout (no per-type subfolder)."
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("e.g. Dungeons & Dragons/04. Kniha příšer/Homebrew Příšery")
+          .setValue(this.plugin.settings.monsterLibraryFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.monsterLibraryFolder = value.replace(/\/+$/, "").trim();
+            await this.plugin.saveSettings();
+          });
+      });
+
+    // ---- Party Groups ----
+    // Named PC rosters for the Character Tracker block's party picker (see
+    // CharacterTracker/resolveCharacterTrackerRoster above) - set up once
+    // here, then just pick a group by name in any `character-tracker` note
+    // instead of hand-picking every player every time.
+    containerEl.createEl("h3", { text: "Party Groups" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text:
+        "Named PC rosters the Character Tracker block (`character-tracker`) can show as cards for. Add every " +
+        "player to a group once here, then pick that group in any character-tracker note. Each block can still " +
+        "add extra individual PCs on top of whichever group it uses, for one-off scenes.",
+    });
+    (this.plugin.settings.partyGroups || []).forEach((group, index) => {
+      const groupWrap = containerEl.createEl("div", { cls: "party-group-settings-block" });
+      const nameSetting = new Setting(groupWrap).setName(`Group ${index + 1}`);
+      nameSetting.addText((text) => {
+        text
+          .setPlaceholder("e.g. Core Four")
+          .setValue(group.name)
+          .onChange(async (value) => {
+            group.name = value;
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.style.width = "100%";
+      });
+      nameSetting.addExtraButton((btn) => {
+        btn
+          .setIcon("trash-2")
+          .setTooltip("Remove group")
+          .onClick(async () => {
+            this.plugin.settings.partyGroups.splice(index, 1);
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+      renderLinkedNoteList(this.app, groupWrap, "", {
+        candidates: getAllPlayerNotes(this.app),
+        entries: group.members || [],
+        datalistId: `party-group-members-${group.id}`,
+        placeholder: "Character name...",
+        addButtonLabel: "Add PC",
+        allowManual: false,
+        emptyText: "No members yet.",
+        onAdd: async (val) => {
+          group.members = group.members || [];
+          group.members.push(val);
+          await this.plugin.saveSettings();
+          this.display();
+        },
+        onRemove: async (entry, idx) => {
+          group.members.splice(idx, 1);
+          await this.plugin.saveSettings();
+          this.display();
+        },
+      });
+    });
+    new Setting(containerEl).addButton((btn) => {
+      btn
+        .setButtonText("Add Party Group")
+        .setCta()
+        .onClick(async () => {
+          this.plugin.settings.partyGroups.push({ id: genId(), name: "New Party", members: [] });
+          await this.plugin.saveSettings();
+          this.display();
+        });
+    });
+
+    new Setting(containerEl)
+      .setName("Homebrew data folder")
+      .setDesc(
+        "Optional. When set, Classes/Subclasses/Races/Ancestries/Features/Backgrounds below are no longer stored " +
+          'inline in this plugin\'s data.json - each sourcebook gets its own "<this>/<Book Name>/<Book Name>.json" ' +
+          "file instead, grouped by each entry's own Book field (so a book's content is one small, independently " +
+          "readable file instead of everything sharing one array). Point this inside this plugin's own folder " +
+          "(see the placeholder) to keep it hidden from the File Explorer and every note-scanning plugin, exactly " +
+          "like data.json itself - unlike the library folders above, this one isn't meant to be a normal vault " +
+          "folder. Leave blank to keep everything in data.json as before - nothing changes until this is set."
+      )
+      .addText((text) => {
+        // Committed on blur rather than on every keystroke (unlike the
+        // plain folder-path settings above) - saveSettings() reacts to
+        // this one by moving real homebrew data into per-book files, so
+        // an in-progress, not-yet-finished path shouldn't trigger that on
+        // every character typed.
+        text
+          .setPlaceholder(`${this.plugin.manifest.dir || ".obsidian/plugins/dnd-2024-character-sheet"}/Homebrew Data`)
+          .setValue(this.plugin.settings.homebrewDataFolder);
+        text.inputEl.addEventListener("blur", async () => {
+          const value = text.getValue().replace(/\/+$/, "").trim();
+          if (value === (this.plugin.settings.homebrewDataFolder || "")) return;
+          this.plugin.settings.homebrewDataFolder = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
     let pendingDataFolder = this.plugin.settings.dataFolder;
     new Setting(containerEl)
       .setName("Character data folder")
@@ -14827,23 +19007,6 @@ class Dnd2024SettingTab extends PluginSettingTab {
             const moved = await this.plugin.moveDataFolder(pendingDataFolder);
             if (moved) this.display();
           });
-      });
-
-    new Setting(containerEl)
-      .setName("Hide character data from search")
-      .setDesc(
-        "The data folder above is already hidden from the file tree on the left. This button additionally " +
-          "renames each character's companion-file subfolder to a random id instead of the character's own " +
-          "name, so it stops showing up when you search for that character elsewhere in Obsidian - including " +
-          'in other plugins\' own "pick a note" fields, like Initiative Tracker\'s "Link to Note", which list ' +
-          "every vault file directly and aren't affected by Obsidian's own Excluded Files setting. Only " +
-          "needed once, for characters created before this option existed - new characters get this " +
-          "automatically. Safe to click more than once."
-      )
-      .addButton((btn) => {
-        btn.setButtonText("Migrate now").onClick(async () => {
-          await this.plugin.migrateToOpaqueDataFolderIds();
-        });
       });
 
     new Setting(containerEl)
@@ -14997,13 +19160,40 @@ class Dnd2024SettingTab extends PluginSettingTab {
     // and renderMechanicEditor for how a subclass feature/race trait/
     // standalone feature can also get a real interactive picker or
     // limited-use tracker via an optional "Mechanic".
+    // Mobile-only declutter toggle for the whole Homebrew Content section
+    // below - has no effect on desktop (Platform.isMobile is false there,
+    // so this Setting doesn't even render and the section always shows).
+    // See DEFAULT_SETTINGS.mobileHomebrewCreationEnabled for the default/
+    // reasoning; the section itself is gated by the same flag right below.
+    if (Platform.isMobile) {
+      new Setting(containerEl)
+        .setName("Homebrew creation on mobile phone")
+        .setDesc(
+          "Shows the Homebrew Content section below (the Classes/Subclasses/Races/Ancestries/Backgrounds/" +
+            "Features/Items/Feats creation wizards) here in Settings when using the plugin on a phone. On by " +
+            "default - existing homebrew content keeps working everywhere regardless of this toggle, so turning " +
+            "it off just hides the wizards themselves to keep this screen shorter on a phone."
+        )
+        .addToggle((toggle) => {
+          toggle.setValue(this.plugin.settings.mobileHomebrewCreationEnabled !== false).onChange(async (value) => {
+            this.plugin.settings.mobileHomebrewCreationEnabled = value;
+            await this.plugin.saveSettings();
+            this.display();
+          });
+        });
+    }
+
+    if (!Platform.isMobile || this.plugin.settings.mobileHomebrewCreationEnabled !== false) {
     containerEl.createEl("h3", { text: "Homebrew Content" });
     containerEl.createEl("p", {
       cls: "setting-item-description",
       text:
-        "Add your own Classes, Subclasses, Races/Ancestries (with their own traits), and reusable Features here, " +
-        "each through a short wizard - they show up as real options in the Create Character wizard and the Update " +
-        "Character Sheet wizard, right alongside the plugin's built-in ones.",
+        "Add your own Classes, Subclasses, Races (with their own traits), Ancestries (Draconic Ancestry/Elven " +
+        "Lineage-style sub-choices attached to a race), Backgrounds, reusable Features, Feats, and Item notes here, " +
+        "each through a short wizard - Classes/Subclasses/Races/Ancestries/Backgrounds/Features show up as real " +
+        "options in the Create Character wizard and (except Backgrounds) the Update Character Sheet wizard, right " +
+        "alongside the plugin's built-in ones, while Feats and Items create a real note in your vault, filed " +
+        "alongside your existing Feat and item libraries.",
     });
 
     const persistHomebrew = async () => {
@@ -15016,7 +19206,7 @@ class Dnd2024SettingTab extends PluginSettingTab {
     this.plugin.settings.homebrewClasses.forEach((cls, index) => {
       new Setting(containerEl)
         .setName(cls.name || "(unnamed)")
-        .setDesc(`Hit Die: d${cls.hitDie || 8}`)
+        .setDesc(`Hit Die: d${cls.hitDie || 8} · Book: ${getHomebrewBookLabel(cls)}`)
         .addExtraButton((btn) => {
           btn
             .setIcon("pencil")
@@ -15058,7 +19248,7 @@ class Dnd2024SettingTab extends PluginSettingTab {
       const featCount = (sub.features || []).length;
       new Setting(containerEl)
         .setName(sub.name || "(unnamed)")
-        .setDesc(`${sub.className || "(no class)"} - ${featCount} feature${featCount === 1 ? "" : "s"}`)
+        .setDesc(`${sub.className || "(no class)"} - ${featCount} feature${featCount === 1 ? "" : "s"} · Book: ${getHomebrewBookLabel(sub)}`)
         .addExtraButton((btn) => {
           btn
             .setIcon("pencil")
@@ -15089,20 +19279,22 @@ class Dnd2024SettingTab extends PluginSettingTab {
       });
     });
 
-    // -- Races / Ancestries --
-    containerEl.createEl("h4", { text: "Races / Ancestries" });
+    // -- Races --
+    containerEl.createEl("h4", { text: "Races" });
     containerEl.createEl("p", {
       cls: "setting-item-description",
       text:
         "Each trait works exactly like a built-in species trait (e.g. Darkvision, if you name it that, will also " +
-        "update the Senses tab - see RACE_TRAITS' own Darkvision entries for the wording that triggers it).",
+        "update the Senses tab - see RACE_TRAITS' own Darkvision entries for the wording that triggers it). To give " +
+        "a race a Draconic Ancestry/Elven Lineage-style sub-choice (pick one of several named options right after " +
+        "Race), use the separate Ancestries section below instead of a plain trait.",
     });
     this.plugin.settings.homebrewRaces.forEach((race, raceIndex) => {
       if (!Array.isArray(race.traits)) race.traits = [];
       const traitCount = race.traits.length;
       new Setting(containerEl)
         .setName(race.name || "(unnamed)")
-        .setDesc(`${traitCount} trait${traitCount === 1 ? "" : "s"}`)
+        .setDesc(`${traitCount} trait${traitCount === 1 ? "" : "s"} · Book: ${getHomebrewBookLabel(race)}`)
         .addExtraButton((btn) => {
           btn
             .setIcon("pencil")
@@ -15125,9 +19317,111 @@ class Dnd2024SettingTab extends PluginSettingTab {
         });
     });
     new Setting(containerEl).addButton((btn) => {
-      btn.setButtonText("+ Add Race / Ancestry").onClick(() => {
+      btn.setButtonText("+ Add Race").onClick(() => {
         openHomebrewRaceWizard(null, async (data) => {
           this.plugin.settings.homebrewRaces.push(data);
+          await persistHomebrew();
+        });
+      });
+    });
+
+    // -- Ancestries --
+    // A separate list from Races above (see homebrewAncestries/
+    // openHomebrewAncestryWizard) - each Ancestry attaches a Draconic
+    // Ancestry/Elven Lineage-style sub-choice to an existing race (built-in
+    // or homebrew) named by raceName, surfaced as its own dropdown right
+    // after Race on Create Character's Page 1 (see findRaceSubChoiceTrait).
+    containerEl.createEl("h4", { text: "Ancestries" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text:
+        'An Ancestry is a Draconic Ancestry/Elven Lineage-style sub-choice attached to an existing race - it shows ' +
+        "up as its own dropdown right after Race on the Create Character wizard, instead of a generic Features-tab " +
+        "choice. Pick which race it belongs to below; the race itself (built-in or homebrew) is unaffected.",
+    });
+    const currentRaceOptions = () => [...RACE_OPTIONS, ...this.plugin.settings.homebrewRaces.map((r) => r.name)];
+    this.plugin.settings.homebrewAncestries.forEach((anc, ancIndex) => {
+      const optCount = (anc.options || []).length;
+      new Setting(containerEl)
+        .setName(anc.traitName || "(unnamed)")
+        .setDesc(`${anc.raceName || "(no race)"} - ${optCount} option${optCount === 1 ? "" : "s"} · Book: ${getHomebrewBookLabel(anc)}`)
+        .addExtraButton((btn) => {
+          btn
+            .setIcon("pencil")
+            .setTooltip("Edit")
+            .onClick(() => {
+              openHomebrewAncestryWizard(anc, currentRaceOptions(), async (data) => {
+                Object.assign(anc, data);
+                await persistHomebrew();
+              });
+            });
+        })
+        .addExtraButton((btn) => {
+          btn
+            .setIcon("trash-2")
+            .setTooltip("Remove ancestry")
+            .onClick(async () => {
+              this.plugin.settings.homebrewAncestries.splice(ancIndex, 1);
+              await persistHomebrew();
+            });
+        });
+    });
+    new Setting(containerEl).addButton((btn) => {
+      btn.setButtonText("+ Add Ancestry").onClick(() => {
+        openHomebrewAncestryWizard(null, currentRaceOptions(), async (data) => {
+          this.plugin.settings.homebrewAncestries.push(data);
+          await persistHomebrew();
+        });
+      });
+    });
+
+    // -- Backgrounds --
+    // Unlike Items/Feats below, this IS a persisted list (like Classes/
+    // Subclasses/Races/Ancestries above) - see homebrewBackgrounds/
+    // openHomebrewBackgroundWizard - because a background has to show up as
+    // a real, pickable option in the Create Character wizard's Background
+    // dropdown (getAllBackgroundOptions), with its own working Ability
+    // Bonus panel and auto-checked skills (getBackgroundData), not just a
+    // one-off vault note.
+    containerEl.createEl("h4", { text: "Backgrounds" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text:
+        "Add your own 2024-style backgrounds here - each shows up as a real option in the Create Character " +
+        "wizard's Background dropdown, right alongside the 16 official ones, with the same working Ability Bonus " +
+        "picker and auto-checked skill proficiencies.",
+    });
+    this.plugin.settings.homebrewBackgrounds.forEach((bg, bgIndex) => {
+      new Setting(containerEl)
+        .setName(bg.name || "(unnamed)")
+        .setDesc(`${(bg.abilities || []).map((a) => a.toUpperCase()).join("/")} - ${(bg.skills || []).join(", ")} · Book: ${getHomebrewBookLabel(bg)}`)
+        .addExtraButton((btn) => {
+          btn
+            .setIcon("pencil")
+            .setTooltip("Edit")
+            .onClick(async () => {
+              const allFeatNotes = await getAllFeatNotes(this.app);
+              openHomebrewBackgroundWizard(bg, allFeatNotes.map((f) => f.nameEn), async (data) => {
+                Object.assign(bg, data);
+                await persistHomebrew();
+              });
+            });
+        })
+        .addExtraButton((btn) => {
+          btn
+            .setIcon("trash-2")
+            .setTooltip("Remove background")
+            .onClick(async () => {
+              this.plugin.settings.homebrewBackgrounds.splice(bgIndex, 1);
+              await persistHomebrew();
+            });
+        });
+    });
+    new Setting(containerEl).addButton((btn) => {
+      btn.setButtonText("+ Add Background").onClick(async () => {
+        const allFeatNotes = await getAllFeatNotes(this.app);
+        openHomebrewBackgroundWizard(null, allFeatNotes.map((f) => f.nameEn), async (data) => {
+          this.plugin.settings.homebrewBackgrounds.push(data);
           await persistHomebrew();
         });
       });
@@ -15145,7 +19439,10 @@ class Dnd2024SettingTab extends PluginSettingTab {
     this.plugin.settings.homebrewFeatures.forEach((feat, index) => {
       new Setting(containerEl)
         .setName(feat.name || "(unnamed)")
-        .setDesc(feat.mechanic ? `Mechanic: ${feat.mechanic.type === "choice" ? "Choice from a list" : "Limited-use resource"}` : "No mechanic")
+        .setDesc(
+          (feat.mechanic ? `Mechanic: ${feat.mechanic.type === "choice" ? "Choice from a list" : "Limited-use resource"}` : "No mechanic") +
+            ` · Book: ${getHomebrewBookLabel(feat)}`
+        )
         .addExtraButton((btn) => {
           btn
             .setIcon("pencil")
@@ -15175,6 +19472,72 @@ class Dnd2024SettingTab extends PluginSettingTab {
         });
       });
     });
+
+    // -- Items --
+    // Unlike Classes/Subclasses/Races/Ancestries/Features above, there's no
+    // persisted list here to edit afterward - each click creates a real
+    // vault note (via createHomebrewItemNote, on the plugin class) filed
+    // under settings.itemLibraryFolder (see that setting above), and from
+    // then on it's just a normal item note, edited the normal way.
+    containerEl.createEl("h4", { text: "Items" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text:
+        "Creates a real item note in your vault - formatted and tagged the same as the rest of your item library - " +
+        'filed into a rarity subfolder under the "Item library folder" path set above. Set that folder first if ' +
+        "you haven't already.",
+    });
+    new Setting(containerEl).addButton((btn) => {
+      btn.setButtonText("+ Create Homebrew Item Note").onClick(() => {
+        openHomebrewItemWizard(async (data) => {
+          await this.plugin.createHomebrewItemNote(data);
+        });
+      });
+    });
+
+    // -- Feats --
+    // Same "real vault note, no persisted list" shape as Items above, but
+    // bilingual (see buildHomebrewFeatNote) and filed by category (see
+    // FEAT_CATEGORIES) under settings.featLibraryFolder instead of by
+    // rarity.
+    containerEl.createEl("h4", { text: "Feats" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text:
+        "Creates a real bilingual feat note in your vault - formatted and tagged the same as the rest of your Rysy " +
+        '(Feats) library - filed into its category\'s subfolder under the "Feat library folder" path set above. ' +
+        "Set that folder first if you haven't already.",
+    });
+    new Setting(containerEl).addButton((btn) => {
+      btn.setButtonText("+ Create Homebrew Feat Note").onClick(() => {
+        openHomebrewFeatWizard(async (data) => {
+          await this.plugin.createHomebrewFeatNote(data);
+        });
+      });
+    });
+
+    // -- Monsters --
+    // Same "real vault note, no persisted list" shape as Items/Feats above,
+    // but filed flat (see createHomebrewMonsterNote) under
+    // settings.monsterLibraryFolder instead of by rarity/category - real
+    // homebrew monsters in this vault all live together in one bestiary
+    // folder regardless of type.
+    containerEl.createEl("h4", { text: "Monsters" });
+    containerEl.createEl("p", {
+      cls: "setting-item-description",
+      text:
+        "Creates a real monster note in your vault - frontmatter plus a statblock codeblock, formatted and " +
+        'tagged the same as the rest of your bestiary - filed into the "Monster library folder" path set above. ' +
+        "Set that folder first if you haven't already.",
+    });
+    new Setting(containerEl).addButton((btn) => {
+      btn.setButtonText("+ Create Homebrew Monster Note").onClick(() => {
+        openHomebrewMonsterWizard(async (data) => {
+          await this.plugin.createHomebrewMonsterNote(data);
+        });
+      });
+    });
+    } // end "if showing Homebrew Content" (see the mobile toggle above)
   }
 }
 
@@ -15230,9 +19593,8 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
     // metadataCache may have already dropped its cache entry for this path
     // by the time this listener runs (registration order between plugins
     // and core isn't guaranteed) - a plain Map isn't affected by that
-    // race. Falls back to the pre-migration "folder named after the
-    // character" layout for anyone who hasn't run
-    // migrateToOpaqueDataFolderIds() yet.
+    // race. Falls back to the "folder named after the character" layout
+    // for the rare vault that still has one (see companionFilePath()).
     this.registerEvent(
       this.app.vault.on("delete", async (file) => {
         // Only a MAIN character note being deleted should cascade. A
@@ -15378,6 +19740,12 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
       const child = new CreaturesTracker(el, this.app, mainFile);
       ctx.addChild(child);
     });
+    this.registerMarkdownCodeBlockProcessor("character-tracker", (source, el, ctx) => {
+      const mainFile = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+      if (!mainFile) return;
+      const child = new CharacterTracker(el, this.app, mainFile);
+      ctx.addChild(child);
+    });
 
     // Tags the "Training" button inside the Character Details button group
     // with its own class (dnd-sheet-tag-training-btn), matched by its exact
@@ -15447,16 +19815,42 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
       this.settings.customSections = DEFAULT_SETTINGS.customSections.map((s) => ({ ...s }));
     }
     // Same fallback as customSections above, for anyone upgrading from a
-    // data.json that predates the four homebrew lists.
-    for (const key of ["homebrewClasses", "homebrewSubclasses", "homebrewRaces", "homebrewFeatures"]) {
+    // data.json that predates these homebrew lists (homebrewBackgrounds is
+    // the newest - see openHomebrewBackgroundWizard).
+    for (const key of HOMEBREW_LIST_KEYS) {
       if (!Array.isArray(this.settings[key])) this.settings[key] = [];
+    }
+    // Same fallback as customSections/HOMEBREW_LIST_KEYS above, for anyone
+    // upgrading from a data.json that predates Party Groups.
+    if (!Array.isArray(this.settings.partyGroups)) this.settings.partyGroups = [];
+    // When homebrewDataFolder is set, the per-book <Book Name>.json files
+    // underneath it - not whatever's in data.json's own six arrays (which
+    // saveSettings() keeps emptied out once this is on, see below) - are
+    // the source of truth. See readHomebrewBookFiles/writeHomebrewBookFiles
+    // above for why a full read/full rewrite is used instead of a diff.
+    const homebrewRoot = (this.settings.homebrewDataFolder || "").trim();
+    if (homebrewRoot) {
+      const merged = await readHomebrewBookFiles(this.app.vault.adapter, homebrewRoot);
+      for (const key of HOMEBREW_LIST_KEYS) this.settings[key] = merged[key];
     }
     SHARED_FOLDER = this.settings.dataFolder || DEFAULT_SETTINGS.dataFolder;
     syncHomebrewFromSettings(this.settings);
   }
 
   async saveSettings() {
-    await this.saveData(this.settings);
+    const homebrewRoot = (this.settings.homebrewDataFolder || "").trim();
+    if (homebrewRoot) {
+      await writeHomebrewBookFiles(this.app.vault.adapter, this.settings);
+      // Kept out of data.json once a homebrew data folder is set - the
+      // per-book files above are the persisted copy; this.settings itself
+      // (and therefore HOMEBREW/the wizards) keeps the real in-memory
+      // arrays, only what actually hits disk here is emptied.
+      const toPersist = Object.assign({}, this.settings);
+      for (const key of HOMEBREW_LIST_KEYS) toPersist[key] = [];
+      await this.saveData(toPersist);
+    } else {
+      await this.saveData(this.settings);
+    }
     syncHomebrewFromSettings(this.settings);
   }
 
@@ -15509,125 +19903,6 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
     }
   }
 
-  // Moves every character's companion-data subfolder off the old "named
-  // after the character" scheme onto the opaque per-character id scheme -
-  // see the big comment above companionFilePath()/ensureDataFolderId() for
-  // why. New characters get an id automatically the moment their first
-  // companion file is created; this is only needed once, for characters
-  // that already existed before this update. Safe to run more than once -
-  // a folder already named after an id, or a character that already has a
-  // data_id, is simply skipped the second time. Called from the "Hide
-  // character data from search" button in Settings > D&D 2024 Character
-  // Sheet > Character data folder.
-  async migrateToOpaqueDataFolderIds() {
-    const ID_PATTERN = /^[0-9a-f]{8}$/;
-    const folder = this.app.vault.getAbstractFileByPath(SHARED_FOLDER);
-    if (!(folder instanceof TFolder)) {
-      new Notice("Nothing to migrate - the character data folder doesn't exist yet.");
-      return { moved: 0, skipped: 0 };
-    }
-
-    const mainFiles = this.app.vault.getMarkdownFiles().filter((f) => !f.path.startsWith(`${SHARED_FOLDER}/`));
-
-    let moved = 0;
-    let skipped = 0;
-    for (const child of folder.children.slice()) {
-      if (!(child instanceof TFolder)) continue;
-      if (ID_PATTERN.test(child.name)) continue; // already an id - already migrated
-
-      const matches = mainFiles.filter((f) => f.basename === child.name);
-      if (matches.length !== 1) {
-        // No matching character note (orphaned data), or more than one
-        // note somewhere in the vault shares this exact name (ambiguous
-        // which one owns this folder) - leave it alone rather than guess.
-        skipped++;
-        continue;
-      }
-      const mainFile = matches[0];
-
-      try {
-        const id = await ensureDataFolderId(this.app, mainFile);
-        const newPath = `${SHARED_FOLDER}/${id}`;
-        if (this.app.vault.getAbstractFileByPath(newPath)) {
-          skipped++;
-          continue;
-        }
-        await this.app.vault.rename(child, newPath);
-        moved++;
-      } catch (e) {
-        skipped++;
-      }
-    }
-
-    new Notice(
-      skipped > 0
-        ? `Migrated ${moved} character(s) to hidden data folders (${skipped} skipped).`
-        : `Migrated ${moved} character(s) to hidden data folders.`
-    );
-    return { moved, skipped };
-  }
-
-  // Moves any character companion files still using the old flat
-  // "<SHARED_FOLDER>/<Name> - <Kind>.md" naming scheme into their own
-  // per-character subfolder ("<SHARED_FOLDER>/<Name>/<Kind>.md") - the
-  // layout every new character already gets automatically (see
-  // ensureCharacterFile()). Existing characters created before this update
-  // keep working either way; this just brings their files in line with new
-  // ones. Safe to run more than once - already-migrated files no longer
-  // match the flat pattern, so a second run just finds nothing to do.
-  // Called from the "Migrate" button in Settings > D&D 2024 Character
-  // Sheet.
-  async migrateToPerCharacterFolders() {
-    const KIND_PATTERN = /^(.+) - (Abilities|Features|Actions|Conditions|Defenses|Notes|Inventory|Spells)\.md$/;
-    const prefix = `${SHARED_FOLDER}/`;
-    const candidates = [];
-    for (const f of this.app.vault.getMarkdownFiles()) {
-      if (!f.path.startsWith(prefix)) continue;
-      const rest = f.path.slice(prefix.length);
-      // Only files directly under SHARED_FOLDER match the old flat scheme -
-      // anything with a further "/" is already inside a per-character
-      // subfolder (freshly created, or already migrated) and is left alone.
-      if (rest.includes("/")) continue;
-      const match = rest.match(KIND_PATTERN);
-      if (!match) continue;
-      candidates.push({ file: f, name: match[1], kind: match[2] });
-    }
-
-    if (candidates.length === 0) {
-      new Notice("Nothing to migrate - every character is already using its own folder.");
-      return { moved: 0, skipped: 0 };
-    }
-
-    let moved = 0;
-    let skipped = 0;
-    for (const { file, name, kind } of candidates) {
-      const charFolder = `${SHARED_FOLDER}/${name}`;
-      const newPath = `${charFolder}/${kind}.md`;
-      if (this.app.vault.getAbstractFileByPath(newPath)) {
-        // Destination already occupied (e.g. a partial earlier migration) -
-        // don't overwrite it, just leave the old file where it is.
-        skipped++;
-        continue;
-      }
-      try {
-        if (!this.app.vault.getAbstractFileByPath(charFolder)) {
-          await this.app.vault.createFolder(charFolder);
-        }
-        await this.app.vault.rename(file, newPath);
-        moved++;
-      } catch (e) {
-        skipped++;
-      }
-    }
-
-    new Notice(
-      skipped > 0
-        ? `Migrated ${moved} file(s) into their own character folders (${skipped} skipped).`
-        : `Migrated ${moved} file(s) into their own character folders.`
-    );
-    return { moved, skipped };
-  }
-
   // Builds the free-text section(s) appended to the bottom of a new
   // character note from the user's configured settings. `overrides` is an
   // optional map of lowercased-heading -> replacement content, used to
@@ -15674,7 +19949,7 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
     // instead of just its bare name.
     const allFeatNotes = await getAllFeatNotes(this.app);
 
-    const overlay = document.createElement("div");
+    const overlay = activeDocument.createElement("div");
     overlay.className = "action-modal-overlay";
     const modal = overlay.createEl("div", { cls: "action-modal action-modal-wide" });
 
@@ -15701,21 +19976,34 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
     nextArrowBtn.setText("›");
 
     // ---- Page containers, in D&D Beyond's own character-builder order:
-    // Class -> Background -> Species -> Abilities -> [Spells, conditional]
-    // -> Equipment -> Features. buildCharSheetFields below is completely
-    // unchanged and still builds every field into just one leftCol/one
-    // rightCol exactly as it always has (see its own top-of-function
-    // comment) - those two columns become the Abilities page's own two
-    // columns, and the relocation block right after the call physically
-    // moves the Species/Class/Background field rows out into their own
-    // page containers via appendChild. appendChild MOVES an existing node
-    // rather than cloning it, and every event listener/closure
-    // buildCharSheetFields wired up is attached to the element objects
-    // themselves, not to "which page currently contains them" - so this is
-    // safe and requires zero changes to that function's field-building/
-    // wiring logic, which the Update Character Sheet modal still shares
-    // unmodified.
+    // Home -> Class -> Background -> Species -> Abilities -> [Spells,
+    // conditional] -> Equipment -> Features. buildCharSheetFields below is
+    // completely unchanged and still builds every field into just one
+    // leftCol/one rightCol exactly as it always has (see its own
+    // top-of-function comment) - those two columns become the Abilities
+    // page's own two columns, and the relocation block right after the call
+    // physically moves the Species/Class/Background field rows out into
+    // their own page containers via appendChild. appendChild MOVES an
+    // existing node rather than cloning it, and every event listener/
+    // closure buildCharSheetFields wired up is attached to the element
+    // objects themselves, not to "which page currently contains them" - so
+    // this is safe and requires zero changes to that function's field-
+    // building/wiring logic, which the Update Character Sheet modal still
+    // shares unmodified.
+    //
+    // Home is the new first page - visible by default since it's page 1;
+    // every other page container below explicitly hides itself instead
+    // (Content Level/3rd Party Content, the old Class-page homebrew filter's
+    // replacement, are built further down, once homeLeftCol/homeInfoCol and
+    // refs both exist).
+    const homePageEl = modal.createEl("div");
+    homePageEl.createEl("div", { cls: "stat-subheader", text: "Home" });
+    const homeColWrap = homePageEl.createEl("div", { cls: "modal-columns" });
+    const homeLeftCol = homeColWrap.createEl("div", { cls: "modal-col" });
+    const homeInfoCol = homeColWrap.createEl("div", { cls: "modal-col wizard-info-panel" });
+
     const classPageEl = modal.createEl("div");
+    classPageEl.style.display = "none";
     classPageEl.createEl("div", { cls: "stat-subheader", text: "Class" });
     const classColWrap = classPageEl.createEl("div", { cls: "modal-columns" });
     const classLeftCol = classColWrap.createEl("div", { cls: "modal-col" });
@@ -15796,6 +20084,352 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
     namebarPortraitImg.addEventListener("click", () => refs.portraitFileInput.click());
     namebarPortraitPlaceholder.addEventListener("click", () => refs.portraitFileInput.click());
 
+    // ---- Home page: Content Level + 3rd Party Content filter (formerly a
+    // "Homebrew Content filter" block prepended to the Class page - moved to
+    // its own first page per the user's own framing of this feature). Lets
+    // the player pick between the plugin's full official content and just
+    // the SRD 5.2.1 subset, and independently toggle which homebrew books
+    // (from Settings > D&D 2024 Character Sheet > Homebrew Content -
+    // Classes/Subclasses/Races/Ancestries/Backgrounds/Features - each one's
+    // own Book field, see openHomebrewClassWizard etc. and
+    // getHomebrewBookOptions/getHomebrewBookLabel above) show up in this
+    // Create Character wizard's pickers. Built entirely here, never inside
+    // buildCharSheetFields (shared with the Update Character Sheet/Level Up
+    // modal), and only ever touches Race/Class/Subclass/Background <select>
+    // option visibility plus the two searchable card lists below, the
+    // Spells page's spell-choice lists (see buildSpellsPage), and the
+    // Features page's own "Insert Homebrew Feature" row further down - so
+    // openCharSheetModal (which shares buildCharSheetFields but builds its
+    // own separate classPageEl/buildFeaturesPage) is completely untouched.
+    // Arcana Unleashed content isn't part of HOMEBREW at all (it's static,
+    // always-on official content, per the user's own explicit call), so none
+    // of this filtering can ever reach it either way.
+
+    // contentLevel: "all" shows every official race/class/subclass/spell
+    // this plugin knows about; "srd" narrows official content down to the
+    // SRD 5.2.1 (Creative Commons) subset (see SRD_RACES/SRD_CLASSES/
+    // SRD_SUBCLASS_BY_CLASS/SRD_BACKGROUNDS/SRD_SPELL_NAMES above). Defaults
+    // to "all", matching this filter's old default behavior exactly (every
+    // official entry visible).
+    let contentLevel = "all";
+    // enabledBooks/thirdPartyEnabled replace the old single Homebrew Book
+    // dropdown + "Use Homebrew Content" checkbox - every book defaults to
+    // enabled (again, matching the old default of "everything visible").
+    // "All" is a dropdown-only sentinel from getHomebrewBookOptions(), never
+    // a real book, so it's excluded here same as from the book card list
+    // built further down.
+    let enabledBooks = new Set(getHomebrewBookOptions().filter((b) => b !== "All"));
+    let thirdPartyEnabled = true;
+    // Tracks whichever Content Level/book card was MOST RECENTLY CLICKED,
+    // purely to drive the right-column info panel below - independent of
+    // enabledBooks/contentLevel's actual on/off state (a book can be
+    // clicked to see its blurb without that click toggling it off).
+    let lastClickedInfo = { type: "contentLevel", value: "all" };
+
+    // Bug report #1: the Eberron books this plugin's own generator scripts
+    // added (Exploring Eberron, Frontiers of Eberron: Quickstone) are meant
+    // to read as official 2024 content to the player, not "Enable 3rd Party
+    // Content"-gated homebrew like a random third-party sourcebook - so
+    // unchecking that blanket switch (to hide OTHER homebrew) was quietly
+    // taking Eberron down with it, meaning something as ordinary as
+    // picking a Warforged race needed re-checking it every time. These two
+    // book names below bypass thirdPartyEnabled entirely; the per-book
+    // checkbox list immediately below it still works normally for them, so
+    // a player who genuinely doesn't want Eberron content can still
+    // uncheck just that one book - only the "all 3rd party content off"
+    // switch no longer takes it down as collateral.
+    const ALWAYS_VISIBLE_HOMEBREW_BOOKS = new Set(["Exploring Eberron", "Frontiers of Eberron: Quickstone"]);
+
+    // Homebrew (book !== null) visibility only - see isRaceVisible/
+    // isClassVisible/isSubclassVisible/isBackgroundVisible below for how
+    // official (book === null) content is filtered by contentLevel instead,
+    // since this function alone has no way to know which race/class/
+    // subclass/background it's being asked about.
+    const shouldShowBook = (book) => (thirdPartyEnabled || ALWAYS_VISIBLE_HOMEBREW_BOOKS.has(book)) && enabledBooks.has(book);
+    const getBookForRaceName = (name) => {
+      const hb = HOMEBREW.races.find((r) => r.name === name);
+      return hb ? getHomebrewBookLabel(hb) : null;
+    };
+    const getBookForClassName = (name) => {
+      const hb = HOMEBREW.classes.find((c) => c.name === name);
+      return hb ? getHomebrewBookLabel(hb) : null;
+    };
+    const getBookForSubclassName = (className, name) => {
+      const hb = HOMEBREW.subclasses.find((s) => s.className === className && s.name === name);
+      return hb ? getHomebrewBookLabel(hb) : null;
+    };
+    const getBookForBackgroundName = (name) => {
+      const hb = HOMEBREW.backgrounds.find((b) => b.name === name);
+      return hb ? getHomebrewBookLabel(hb) : null;
+    };
+    // The Ancestry sub-choice dropdown (Draconic Ancestry/Elven Lineage-
+    // style, right after Race - see findRaceSubChoiceTrait/raceSubChoiceRow
+    // in buildCharSheetFields) isn't a choice BETWEEN several ancestries -
+    // a race has at most one - so there's nothing to filter option-by-
+    // option here; the whole row either belongs to this race's one built-in
+    // trait or to one homebrew Ancestry entry naming this race as its
+    // parent (see getRaceTraits). RACE_TRAIT_CHOICES[sub.key] mirrors
+    // exactly the same "built-in wins the lookup" check findRaceSubChoiceTrait
+    // itself does, so this never disagrees with what's actually shown. Not
+    // part of the SRD-vs-all split (SRD_RACES etc. don't track Ancestry
+    // sub-choices at all), so a built-in one (book === null) is always
+    // visible regardless of contentLevel.
+    const getBookForRaceSubChoice = (raceName) => {
+      const sub = findRaceSubChoiceTrait(raceName);
+      if (!sub) return undefined; // no Ancestry sub-choice for this race at all
+      if (RACE_TRAIT_CHOICES[sub.key]) return null; // built-in => official
+      const anc = HOMEBREW.ancestries.find((a) => a.raceName === raceName && a.traitName === sub.traitName);
+      return anc ? getHomebrewBookLabel(anc) : "Homebrew";
+    };
+    // The Species/Class pickers below are searchable card lists driven off
+    // plain name arrays (allRaceNames/allClassNames), not <option> elements,
+    // so they're filtered by calling these directly rather than via
+    // applyFilterToSelect - see renderSpeciesCardList/renderClassCardList.
+    const isRaceVisible = (name) => {
+      const book = getBookForRaceName(name);
+      if (book !== null) return shouldShowBook(book);
+      return contentLevel !== "srd" || SRD_RACES.includes(name);
+    };
+    const isClassVisible = (name) => {
+      const book = getBookForClassName(name);
+      if (book !== null) return shouldShowBook(book);
+      return contentLevel !== "srd" || SRD_CLASSES.includes(name);
+    };
+    const isSubclassVisible = (className, subclassName) => {
+      const book = getBookForSubclassName(className, subclassName);
+      if (book !== null) return shouldShowBook(book);
+      return contentLevel !== "srd" || SRD_SUBCLASS_BY_CLASS[className] === subclassName;
+    };
+    // SRD 5.2.1 lists exactly four backgrounds (Acolyte/Criminal/Sage/
+    // Soldier - see SRD_BACKGROUNDS above), and those four names match
+    // BACKGROUND_DATA_2024 exactly, so this filters with confidence rather
+    // than leaving backgrounds unfiltered. "Custom" is neither SRD content
+    // nor homebrew - it's buildCharSheetFields's own manual-entry escape
+    // hatch (see BACKGROUND_OPTIONS) - so it always stays visible/
+    // selectable regardless of Content Level, same as how official
+    // built-in content bypasses the 3rd Party Content filter.
+    const isBackgroundVisible = (name) => {
+      if (name === "Custom") return true;
+      const book = getBookForBackgroundName(name);
+      if (book !== null) return shouldShowBook(book);
+      return contentLevel !== "srd" || SRD_BACKGROUNDS.includes(name);
+    };
+
+    // Toggles .hidden/.disabled on every real <option> of a plain <select>
+    // (Subclass/2nd Subclass/Background) - if the currently-selected value
+    // becomes hidden, falls back to the first still-visible option and
+    // fires a real change event so anything downstream (subclass
+    // description, background skill auto-fill, etc.) stays in sync.
+    const applyFilterToSelect = (select, isVisibleForValue) => {
+      if (!select) return;
+      for (const opt of Array.from(select.options)) {
+        if (!opt.value) continue;
+        const visible = isVisibleForValue(opt.value);
+        opt.hidden = !visible;
+        opt.disabled = !visible;
+      }
+      const currentStillVisible = Array.from(select.options).some((o) => o.value === select.value && !o.hidden);
+      if (select.value && !currentStillVisible) {
+        const firstVisible = Array.from(select.options).find((o) => o.value && !o.hidden);
+        if (firstVisible) {
+          select.value = firstVisible.value;
+          select.dispatchEvent(new Event("change"));
+        }
+      }
+    };
+
+    // Re-entrancy guard: applyFilterToSelect can dispatch a "change" event
+    // (on falling back to a new value), and Subclass/2nd Subclass's own
+    // classSelect-driven repopulation listener (buildFilteredSubclassSelect,
+    // in buildCharSheetFields) plus applyHomebrewFilters itself are both
+    // registered on that same "change" event - without this guard a
+    // fallback could re-enter and recurse.
+    let applyingHomebrewFilters = false;
+    const applyHomebrewFilters = () => {
+      if (applyingHomebrewFilters) return;
+      applyingHomebrewFilters = true;
+      try {
+        applyFilterToSelect(refs.subclassSelect, (name) => isSubclassVisible(refs.classSelect.value, name));
+        applyFilterToSelect(refs.secondarySubclassSelect, (name) => isSubclassVisible(refs.secondaryClassSelect.value, name));
+        applyFilterToSelect(refs.backgroundSelect, isBackgroundVisible);
+        // Not an <option>-hiding case like the three selects above (see
+        // getBookForRaceSubChoice's own comment) - hides/shows the entire
+        // row instead, but only ever tightens what refreshRaceSubChoice
+        // (buildCharSheetFields, registered before this listener) already
+        // decided; never forces a row visible that has no sub-choice at all.
+        const raceSubChoiceBook = getBookForRaceSubChoice(refs.raceSelect.value);
+        if (raceSubChoiceBook !== undefined) {
+          const raceSubChoiceVisible = raceSubChoiceBook === null ? true : shouldShowBook(raceSubChoiceBook);
+          refs.raceSubChoiceSelect.parentElement.style.display = raceSubChoiceVisible ? "" : "none";
+        }
+        renderSpeciesCardList();
+        renderClassCardList();
+      } finally {
+        applyingHomebrewFilters = false;
+      }
+    };
+
+    // ---- Home page UI: Content Level (single-select cards) + 3rd Party
+    // Content (checkbox + multi-select cards), left column; a live info
+    // panel describing whichever card was most recently clicked, right
+    // column - same "click a card, see its description" idea as
+    // openWizardConfirmPopup further down, just shown inline instead of in
+    // a popup since nothing here needs confirming.
+    homeLeftCol.createEl("div", { cls: "stat-subheader", text: "Content Level" });
+    const contentLevelCardListEl = homeLeftCol.createEl("div", { cls: "wizard-card-list" });
+    const CONTENT_LEVEL_CARDS = [
+      { key: "all", name: "All WotC Content" },
+      { key: "srd", name: "SRD Only" },
+    ];
+    const renderContentLevelCardList = () => {
+      contentLevelCardListEl.empty();
+      for (const c of CONTENT_LEVEL_CARDS) {
+        const card = contentLevelCardListEl.createEl("div", { cls: "wizard-card" });
+        const isSelected = contentLevel === c.key;
+        if (isSelected) card.addClass("is-selected");
+        const nameEl = card.createEl("div", { cls: "wizard-card-name", text: c.name });
+        if (isSelected) nameEl.createEl("span", { cls: "wizard-card-selected-tag", text: "Selected" });
+        card.onclick = () => {
+          contentLevel = c.key;
+          lastClickedInfo = { type: "contentLevel", value: c.key };
+          renderContentLevelCardList();
+          renderHomeInfoPanel();
+          applyHomebrewFilters();
+        };
+      }
+    };
+    renderContentLevelCardList();
+
+    homeLeftCol.createEl("div", { cls: "stat-subheader", text: "3rd Party Content" });
+    const thirdPartyRow = homeLeftCol.createEl("label", { cls: "checklist-item" });
+    const thirdPartyCheckbox = thirdPartyRow.createEl("input", { type: "checkbox" });
+    thirdPartyCheckbox.checked = true;
+    thirdPartyRow.appendText(" Enable 3rd Party Content");
+    const bookCardListEl = homeLeftCol.createEl("div", { cls: "wizard-card-list" });
+    const updateBookCardListVisibility = () => {
+      bookCardListEl.style.display = thirdPartyCheckbox.checked ? "" : "none";
+    };
+    // One card per real homebrew book (getHomebrewBookOptions() minus its
+    // "All" dropdown-only sentinel) - "Homebrew" stays in as a real card,
+    // it's the actual catch-all bucket for any entry with no book set (see
+    // getHomebrewBookLabel). Independently toggleable (multi-select),
+    // unlike the Content Level cards above - all enabled by default.
+    const renderBookCardList = () => {
+      bookCardListEl.empty();
+      for (const book of getHomebrewBookOptions().filter((b) => b !== "All")) {
+        const card = bookCardListEl.createEl("div", { cls: "wizard-card" });
+        const isEnabled = enabledBooks.has(book);
+        if (isEnabled) card.addClass("is-selected");
+        const nameEl = card.createEl("div", { cls: "wizard-card-name", text: book });
+        if (isEnabled) nameEl.createEl("span", { cls: "wizard-card-selected-tag", text: "Enabled" });
+        card.onclick = () => {
+          if (enabledBooks.has(book)) enabledBooks.delete(book);
+          else enabledBooks.add(book);
+          lastClickedInfo = { type: "book", value: book };
+          renderBookCardList();
+          renderHomeInfoPanel();
+          applyHomebrewFilters();
+        };
+      }
+    };
+    renderBookCardList();
+    updateBookCardListVisibility();
+    thirdPartyCheckbox.addEventListener("change", () => {
+      thirdPartyEnabled = thirdPartyCheckbox.checked;
+      updateBookCardListVisibility();
+      applyHomebrewFilters();
+    });
+
+    // One-line blurb per known homebrew book, for the info panel below -
+    // verbatim per the user's own wording. A book with no blurb here (e.g.
+    // a brand new one just added in Settings) simply shows no description
+    // line, only its live content counts.
+    const HOMEBREW_BOOK_BLURBS = {
+      "Kamon Corebook": "A feudal-Japan-themed setting book — new species, classes, subclasses, backgrounds, and traditions inspired by Japanese mythology and history.",
+      "The Black Ballad": "A gothic afterlife-themed sourcebook centered on the Sunless Crossing and its godless, gargoyle, and undead-adjacent species.",
+      "Grizelda's Guide to Ghost Hunting": "A ghost-hunting sourcebook — subclasses, backgrounds, and feats built around tracking and battling the undead.",
+      "Creed's Codex: Arcane Secrets of the Summoners": "A dedicated Summoner class sourcebook, with subclasses built around different summoned-ally archetypes.",
+      "Bloodpunk": "A punk-rebellion-themed sourcebook.",
+    };
+    // "N species, N classes, ..." with the right singular/plural noun per
+    // category, skipping any category whose count is 0 (e.g. Bloodpunk only
+    // contributes a subclass, so its line reads just "Adds 1 subclass.").
+    const countNoun = (n, singular, plural) => `${n} ${n === 1 ? singular : plural}`;
+    const renderHomeInfoPanel = () => {
+      homeInfoCol.empty();
+      if (lastClickedInfo.type === "contentLevel") {
+        if (lastClickedInfo.value === "srd") {
+          homeInfoCol.createEl("div", { cls: "stat-subheader", text: "SRD Only" });
+          homeInfoCol.createEl("p", {
+            cls: "wizard-confirm-desc",
+            text: "Restricts species, classes, subclasses, and spells to exactly what's freely licensed under the System Reference Document 5.2.1 (Creative Commons).",
+          });
+          const srdSubclassCount = Object.keys(SRD_SUBCLASS_BY_CLASS).length;
+          homeInfoCol.createEl("div", {
+            cls: "condition-desc",
+            text: `Includes ${SRD_RACES.length} species, ${SRD_CLASSES.length} classes, ${srdSubclassCount} subclasses, ${SRD_SPELL_NAMES.size} spells.`,
+          });
+        } else {
+          homeInfoCol.createEl("div", { cls: "stat-subheader", text: "All WotC Content" });
+          homeInfoCol.createEl("p", {
+            cls: "wizard-confirm-desc",
+            text: "Every official race, class, subclass, and spell built into this plugin, drawing on the full System Reference Document plus additional Wizards of the Coast sourcebooks.",
+          });
+          const subclassCount = Object.values(SUBCLASS_LEVEL_FEATURES).reduce((sum, subs) => sum + Object.keys(subs).length, 0);
+          const spellCount = new Set([...Object.keys(CANTRIP_CLASS_LIST), ...Object.keys(SPELL_CLASS_LIST)]).size;
+          homeInfoCol.createEl("div", {
+            cls: "condition-desc",
+            text: `Includes ${RACE_OPTIONS.length} species, ${CLASS_OPTIONS.length} classes, ${subclassCount} subclasses, ${spellCount} spells.`,
+          });
+        }
+        return;
+      }
+      const book = lastClickedInfo.value;
+      homeInfoCol.createEl("div", { cls: "stat-subheader", text: book });
+      if (book === "Homebrew") {
+        homeInfoCol.createEl("p", {
+          cls: "wizard-confirm-desc",
+          text: "Your own homemade content that hasn't been assigned to a specific book yet.",
+        });
+      } else if (HOMEBREW_BOOK_BLURBS[book]) {
+        homeInfoCol.createEl("p", { cls: "wizard-confirm-desc", text: HOMEBREW_BOOK_BLURBS[book] });
+      }
+      // Named per-category breakdown (species/classes/subclasses/features/
+      // backgrounds) rather than just a count, per the user's own request -
+      // magic items and monsters are deliberately left out here, since
+      // they're separate note-based content, not part of HOMEBREW.* at all.
+      const entriesFor = (list) => list.filter((e) => getHomebrewBookLabel(e) === book);
+      const nameLine = (list, singular, plural) => {
+        if (!list.length) return;
+        const names = list.map((e) => e.name).join(", ");
+        homeInfoCol.createEl("div", {
+          cls: "condition-desc",
+          text: `${countNoun(list.length, singular, plural)}: ${names}`,
+        });
+      };
+      nameLine(entriesFor(HOMEBREW.races), "species", "species");
+      nameLine(entriesFor(HOMEBREW.classes), "class", "classes");
+      nameLine(entriesFor(HOMEBREW.subclasses), "subclass", "subclasses");
+      nameLine(entriesFor(HOMEBREW.features), "feature", "features");
+      nameLine(entriesFor(HOMEBREW.backgrounds), "background", "backgrounds");
+    };
+    // On first load (nothing clicked yet), lastClickedInfo already defaults
+    // to the active Content Level ("all"), so this shows its description
+    // right away without needing a click first.
+    renderHomeInfoPanel();
+
+    // Registered after buildCharSheetFields's own classSelect-driven
+    // Subclass-repopulation listener (buildFilteredSubclassSelect), so this
+    // always runs AFTER that repopulation and re-applies the current filter
+    // to the freshly-rebuilt option list instead of being clobbered by it.
+    refs.classSelect.addEventListener("change", applyHomebrewFilters);
+    refs.secondaryClassSelect.addEventListener("change", applyHomebrewFilters);
+    // Same "registered after buildCharSheetFields's own listener" reasoning
+    // as classSelect above - raceSelect's own refreshRaceSubChoice listener
+    // (buildCharSheetFields) already ran and decided whether this race has
+    // an Ancestry sub-choice at all by the time this fires.
+    refs.raceSelect.addEventListener("change", applyHomebrewFilters);
+
     // ---- Relocate finished field rows out of abilitiesLeftCol into the
     // Species/Class/Background pages. abilitiesLeftCol holds everything
     // buildCharSheetFields just built, in the exact order it always builds
@@ -15838,7 +20472,7 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
     // both the Species and Class card lists below so the popup's look and
     // Cancel/Confirm wiring only exists once.
     const openWizardConfirmPopup = ({ title, description, summaryLines, detailHeading, detailRows, emptyDetailNote, onConfirm }) => {
-      const confirmOverlay = document.createElement("div");
+      const confirmOverlay = activeDocument.createElement("div");
       confirmOverlay.className = "wizard-confirm-overlay";
       const confirmModal = confirmOverlay.createEl("div", { cls: "wizard-confirm-modal" });
       const header = confirmModal.createEl("div", { cls: "wizard-confirm-header" });
@@ -15874,7 +20508,7 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
         onConfirm();
         confirmOverlay.remove();
       };
-      document.body.appendChild(confirmOverlay);
+      activeDocument.body.appendChild(confirmOverlay);
     };
 
     // ---- Species picker: a searchable card list replacing the raw Race
@@ -15922,7 +20556,7 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
     const renderSpeciesCardList = () => {
       speciesCardListEl.empty();
       const q = speciesSearchInput.value.trim().toLowerCase();
-      const names = allRaceNames.filter((n) => n.toLowerCase().includes(q));
+      const names = allRaceNames.filter((n) => n.toLowerCase().includes(q) && isRaceVisible(n));
       if (!names.length) {
         speciesCardListEl.createEl("div", { cls: "wizard-card-empty", text: "No species match your search." });
         return;
@@ -15991,7 +20625,7 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
     const renderClassCardList = () => {
       classCardListEl.empty();
       const q = classSearchInput.value.trim().toLowerCase();
-      const names = allClassNames.filter((n) => n.toLowerCase().includes(q));
+      const names = allClassNames.filter((n) => n.toLowerCase().includes(q) && isClassVisible(n));
       if (!names.length) {
         classCardListEl.createEl("div", { cls: "wizard-card-empty", text: "No classes match your search." });
         return;
@@ -16046,6 +20680,11 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
       }
       const level = Number(refs.levelSelect.value) || 1;
       const subclassName = level >= 3 ? refs.subclassSelect.value : "";
+      const subclassDesc = getSubclassDescription(className, subclassName);
+      if (subclassDesc) {
+        classInfoCol.createEl("div", { cls: "stat-subheader", text: subclassName });
+        classInfoCol.createEl("p", { cls: "wizard-confirm-desc", text: subclassDesc });
+      }
       const features = collectFeaturesUpToLevel(className, subclassName, level);
       classInfoCol.createEl("div", { cls: "stat-subheader", text: `Features at Level ${level}` });
       if (!features.length) {
@@ -16063,35 +20702,11 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
     refs.levelSelect.addEventListener("change", renderClassInfoPanel);
     renderClassInfoPanel();
 
-    // Auto-check this class's two saving-throw proficiency boxes down on
-    // the Abilities page (primary class only, matching the 2024 rules'
-    // "only your first class grants saving throw proficiencies" - same
-    // reasoning collectClassSelections already applies to subclass
-    // visibility). classAutoSaves tracks only the boxes THIS mechanism
-    // checked, so switching class away again cleanly un-checks just those
-    // two rather than clobbering anything the player checked by hand -
-    // same pattern buildCharSheetFields's own backgroundAutoSkills uses.
-    let classAutoSaves = [];
-    const applyClassSavingThrows = () => {
-      for (const abbr of classAutoSaves) {
-        const row = refs.saveRows.find((s) => s.ability === abbr);
-        if (row) {
-          row.profCb.checked = false;
-          row.profCb.dispatchEvent(new Event("change"));
-        }
-      }
-      classAutoSaves = [];
-      for (const abbr of CLASS_SAVING_THROWS[refs.classSelect.value] || []) {
-        const row = refs.saveRows.find((s) => s.ability === abbr);
-        if (row) {
-          row.profCb.checked = true;
-          row.profCb.dispatchEvent(new Event("change"));
-          classAutoSaves.push(abbr);
-        }
-      }
-    };
-    refs.classSelect.addEventListener("change", applyClassSavingThrows);
-    applyClassSavingThrows();
+    // Saving-throw proficiency (auto-applied from Class, and no longer a
+    // checkbox the player can toggle at all) is now wired up directly
+    // inside buildCharSheetFields itself, right after saveRows is built -
+    // shared verbatim by Create Character and Update Character Sheet, so
+    // there's nothing left to do here.
 
     // ---- Species Info panel (Species page, right column): every trait
     // this species grants (Darkvision included - RACE_TRAITS already lists
@@ -16127,6 +20742,14 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
     refs.raceSubChoiceSelect.addEventListener("change", renderSpeciesInfoPanel);
     renderSpeciesInfoPanel();
 
+    // Establishes the initial Subclass/2nd Subclass/Background option
+    // visibility (Race/Class card lists above are already correctly
+    // filtered from their own first render, since isRaceVisible/
+    // isClassVisible existed before those first ran) - safe to call only
+    // now, since applyHomebrewFilters itself calls renderSpeciesCardList/
+    // renderClassCardList, both of which had to exist first.
+    applyHomebrewFilters();
+
     // ---- Page: Spells (contents built lazily by goToPage) ----
     const page2El = modal.createEl("div");
     page2El.style.display = "none";
@@ -16141,7 +20764,15 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
 
     // Selections made on pages 2/3/4, carried across Back/Next since those
     // pages' DOM gets rebuilt every time they're (re)entered.
-    const wizardState = { spellSelections: [], gearItems: [], featureDraft: null, featureDraftKey: null };
+    // asiDrafts/asiBaseScores back the "Ability Score Improvement" picker
+    // added to the Features page below (see buildFeaturesPage) - asiDrafts
+    // is keyed by "<className>#<level>" (one entry per ASI level the
+    // character's starting level actually reaches, per class) and
+    // asiBaseScores is a one-time snapshot of refs.abilityRows taken the
+    // moment the feature draft is (re)built, so ASI picks can be recomputed
+    // from scratch every time without ever double-applying a +1/+2 onto a
+    // score that already has a previous pick baked into it.
+    const wizardState = { spellSelections: [], gearItems: [], featureDraft: null, featureDraftKey: null, asiDrafts: {}, asiBaseScores: {} };
 
     // Resolves the class/subclass/level choices currently sitting in
     // Page 1's fields - same shape the old single-page Create handler
@@ -16201,14 +20832,22 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
       for (const q of qualifying) {
         const classLevel = classLevelFor(q.className);
         const maxLvl = maxSpellLevelFor(q.className, q.subclassName, level, edition);
-        const cantripListClass = q.className;
-        const canHaveCantrips = CANTRIP_CASTERS.includes(q.className);
+        // Eldritch Knight/Arcane Trickster pick their cantrip from the
+        // WIZARD list in the 2024 rules, not from their own (non-caster)
+        // class - so the cantrip-class filter below has to check against
+        // "Wizard" for them, even though maxSpellLevelFor still uses their
+        // own "third" caster progression for leveled spells.
+        const isThirdCaster = THIRD_CASTER_SUBCLASSES.includes(String(q.subclassName || "").toLowerCase());
+        const cantripListClass = isThirdCaster ? "Wizard" : q.className;
+        const canHaveCantrips = CANTRIP_CASTERS.includes(q.className) || isThirdCaster;
         // "known"-mode classes with a real SPELLS_KNOWN_TABLE entry get that
-        // cap; "prepare"-mode classes (Cleric/Druid/Paladin) get
+        // cap; "prepare"-mode classes (Cleric/Druid/Paladin/Artificer) get
         // the real prepared-spells formula instead (preparedSpellsCapFor);
-        // anything else with no table just shows a running count, no limit.
-        const spellsKnownCap =
-          q.mode === "prepare"
+        // third casters (Eldritch Knight/Arcane Trickster) and anything else
+        // with no table just show a running count, no limit.
+        const spellsKnownCap = isThirdCaster
+          ? null
+          : q.mode === "prepare"
           ? preparedSpellsCapFor(q.className, classLevel, getAbilityModForClass(q.className))
           : spellsKnownCapFor(q.className, classLevel);
         // Cantrips Known is always a fixed, permanently-learned count (see
@@ -16217,13 +20856,19 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
         // gets capped here too, not just "known"-mode ones. 2026-09-23,
         // added per the user's own request: "at character creation, the
         // cantrips should be capped".
-        const cantripsCap = canHaveCantrips ? cantripsKnownCapFor(q.className, classLevel) : null;
-        // "prepare"-mode classes (Cleric/Druid/Paladin) re-select
+        const cantripsCap = canHaveCantrips ? cantripsKnownCapFor(q.className, classLevel, isThirdCaster) : null;
+        // "prepare"-mode classes (Cleric/Druid/Paladin/Artificer) re-select
         // their leveled spells fresh from their whole class list after every
         // Long Rest - see FULL_LIST_PREPARE_CLASSES. This picker is how the
         // player chooses which ones are prepared for day one; whatever gets
         // picked here (and nothing else) lands on the Spells tab.
+        // Spells: not touched by the homebrew book filter - there is still
+        // no homebrew spell-creation wizard - but the Home page's Content
+        // Level does apply here: "SRD Only" narrows this down to exactly
+        // the SRD 5.2.1 spell list (SRD_SPELL_NAMES above), same as it does
+        // for Species/Class/Subclass/Background.
         const accessible = allSpells.filter((sp) => {
+          if (contentLevel === "srd" && !SRD_SPELL_NAMES.has(sp.file.basename)) return false;
           const lvl = Number(sp.fm["Spell level"] ?? 0);
           if (lvl === 0) {
             return canHaveCantrips && cantripAllowedForClass(sp.file.basename, cantripListClass);
@@ -16238,7 +20883,7 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
         if (q.mode === "prepare") {
           section.createEl("div", {
             cls: "wizard-spell-hint",
-            text: "This class re-prepares its spells from its whole class list after every Long Rest. Choose which ones are prepared for day one - the cap below is your spellcasting ability modifier plus your class level (half level, rounded down, for a half caster), minimum 1.",
+            text: "This class re-prepares its spells from its whole class list after every Long Rest. Choose which ones are prepared for day one - the cap below is your spellcasting ability modifier plus your class level (half level, rounded down, for a half caster or Artificer), minimum 1.",
           });
         }
 
@@ -16258,79 +20903,51 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
         const levelLabel = (lvl) => (lvl === 0 ? "Cantrips" : `${lvl}${["", "st", "nd", "rd"][lvl] || "th"} Level`);
         const availableLevels = Object.keys(byLevel).map(Number).sort((a, b) => a - b);
 
-        // Everything used to be dumped into one long multi-select grouped by
-        // optgroup, which got unwieldy once a class had access to several
-        // spell levels at once. This filter dropdown narrows the select down
-        // to one level (or "All Levels") at a time - it hides non-matching
-        // <option>s rather than removing them, so switching the filter back
-        // and forth never loses a selection made under a different filter.
-        const filterRow = section.createEl("div", { cls: "action-modal-row" });
-        filterRow.createEl("span", { cls: "action-modal-label", text: "Show" });
-        const levelFilterSelect = filterRow.createEl("select", { cls: "action-modal-name" });
-        const allLevelsOpt = levelFilterSelect.createEl("option", { text: "All Levels" });
-        allLevelsOpt.value = "all";
-        for (const lvl of availableLevels) {
-          const opt = levelFilterSelect.createEl("option", { text: levelLabel(lvl) });
-          opt.value = String(lvl);
-        }
-        // Default to just the first available level (usually Cantrips)
-        // rather than "All Levels" - showing everything at once by default
-        // is exactly the unfriendly behavior this filter is meant to fix.
-        if (availableLevels.length) levelFilterSelect.value = String(availableLevels[0]);
-
-        const select = section.createEl("select", { cls: "wizard-spell-select", attr: { multiple: true, size: 8 } });
         const existing = wizardState.spellSelections.find((s) => s.className === q.className);
         const preselected = new Set(existing ? existing.spellNames : []);
-        const groupsByLevel = {};
-        for (const lvl of availableLevels) {
-          const group = select.createEl("optgroup", { attr: { label: levelLabel(lvl) } });
-          groupsByLevel[lvl] = group;
-          byLevel[lvl]
-            .sort((a, b) => a.file.basename.localeCompare(b.file.basename))
-            .forEach((sp) => {
-              const opt = group.createEl("option", { text: sp.file.basename });
-              opt.value = sp.file.basename;
-              opt.dataset.level = String(lvl);
-              if (preselected.has(sp.file.basename)) opt.selected = true;
-            });
-        }
-        const applyLevelFilter = () => {
-          const chosen = levelFilterSelect.value;
-          for (const lvl of availableLevels) {
-            // Hide the whole optgroup (not just its options) when it doesn't
-            // match the filter - otherwise the browser still shows every
-            // level's header with nothing underneath it, which is the same
-            // cluttered feel this filter is meant to get rid of.
-            groupsByLevel[lvl].hidden = chosen !== "all" && String(lvl) !== chosen;
-          }
-        };
-        applyLevelFilter();
-        levelFilterSelect.addEventListener("change", applyLevelFilter);
+        if (!existing) wizardState.spellSelections.push({ className: q.className, spellNames: [] });
 
         section.createEl("div", {
           cls: "wizard-spell-hint",
           text: spellsKnownCap != null || cantripsCap != null
-            ? "Ctrl/Cmd-click (or shift-click) to select more than one. Once you've reached this class's cantrip or spell cap, uncheck one before picking another."
+            ? "Ctrl/Cmd-click (or shift-click) to select more than one within a level's own list."
             : "Ctrl/Cmd-click (or shift-click) to select more than one. No spell limit is enforced here - pick as many as apply.",
         });
         const counterEl = section.createEl("div", { cls: "wizard-spell-hint wizard-spell-counter" });
 
-        // Same cap/dim-when-full behavior as the Update Character Sheet
-        // wizard's copy of this picker - see spellsKnownCapFor's,
-        // cantripsKnownCapFor's and preparedSpellsCapFor's comments.
+        // One multi-select PER spell level (Cantrips, 1st Level, etc.)
+        // instead of one combined list behind a "Show" filter dropdown -
+        // every level this class has access to is visible and pickable at
+        // once, per the user's own request, rather than switching a filter
+        // back and forth to see what's chosen where. Each level still
+        // dims/disables its own remaining options once THAT level's own
+        // cap is hit (cantripsCap for level 0, spellsKnownCap for every
+        // other level - same two caps the single-select version enforced,
+        // just applied per box now rather than by dataset.level).
+        const levelSelects = {};
+        const levelBadges = {};
         const updateSpellCapUI = () => {
-          const selectedLeveled = Array.from(select.selectedOptions).filter((o) => Number(o.dataset.level) > 0).length;
-          const selectedCantrips = Array.from(select.selectedOptions).filter((o) => Number(o.dataset.level) === 0).length;
-          if (spellsKnownCap != null) {
-            const atCap = selectedLeveled >= spellsKnownCap;
-            for (const o of Array.from(select.options)) {
-              if (Number(o.dataset.level) > 0 && !o.selected) o.disabled = atCap;
-            }
+          let selectedCantrips = 0;
+          let selectedLeveled = 0;
+          for (const lvl of availableLevels) {
+            const count = levelSelects[lvl].selectedOptions.length;
+            if (lvl === 0) selectedCantrips += count;
+            else selectedLeveled += count;
+            // Per-card badge: just this level's own count. Leveled spells
+            // (lvl > 0) share ONE combined cap across every leveled card
+            // (see spellsKnownCap below), not a cap of their own per level,
+            // so a leveled card's badge is a plain running count; only the
+            // Cantrips card has a true per-card cap to show a fraction
+            // against.
+            levelBadges[lvl].setText(lvl === 0 && cantripsCap != null ? `${count} / ${cantripsCap}` : `${count} chosen`);
           }
-          if (cantripsCap != null) {
-            const cantripsAtCap = selectedCantrips >= cantripsCap;
-            for (const o of Array.from(select.options)) {
-              if (Number(o.dataset.level) === 0 && !o.selected) o.disabled = cantripsAtCap;
+          for (const lvl of availableLevels) {
+            const cap = lvl === 0 ? cantripsCap : spellsKnownCap;
+            if (cap == null) continue;
+            const selectedOfThisLevel = lvl === 0 ? selectedCantrips : selectedLeveled;
+            const atCap = selectedOfThisLevel >= cap;
+            for (const o of Array.from(levelSelects[lvl].options)) {
+              if (!o.selected) o.disabled = atCap;
             }
           }
           const leveledText =
@@ -16344,18 +20961,57 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
             : ` · Cantrips chosen: ${selectedCantrips}`;
           counterEl.setText(leveledText + cantripsText);
         };
-        updateSpellCapUI();
-
-        // Keep wizardState in sync live, so Back/Next round-trips and the
-        // final Create handler don't need to re-read every <select>.
-        select.addEventListener("change", () => {
-          const chosen = Array.from(select.selectedOptions).map((o) => o.value);
+        // Keep wizardState in sync live (combining every level's own select
+        // back into one flat list, same external shape as before), so
+        // Back/Next round-trips and the final Create handler don't need to
+        // re-read every <select>.
+        const commitSelections = () => {
+          const chosen = [];
+          for (const lvl of availableLevels) {
+            chosen.push(...Array.from(levelSelects[lvl].selectedOptions).map((o) => o.value));
+          }
           const rec = wizardState.spellSelections.find((s) => s.className === q.className);
           if (rec) rec.spellNames = chosen;
-          else wizardState.spellSelections.push({ className: q.className, spellNames: chosen });
           updateSpellCapUI();
-        });
-        if (!existing) wizardState.spellSelections.push({ className: q.className, spellNames: [] });
+        };
+        // One collapsible card PER spell level (Cantrips, 1st Level, etc.),
+        // styled like this wizard's own Species/Class selection cards (see
+        // .wizard-spell-level-card in styles.css) - clicking a card's
+        // header expands it into the spell picker for just that level,
+        // per the user's own request, and wireSpellLevelAccordion below
+        // (shared with the Update Character Sheet wizard's identical copy
+        // of this page) keeps only one level open at a time: opening one
+        // closes whichever other level card was already open, so the
+        // player isn't juggling several expanded lists at once.
+        const accordionPairs = [];
+        for (const lvl of availableLevels) {
+          const wrap = section.createEl("div", { cls: "wizard-spell-level-card-wrap" });
+          const header = wrap.createEl("div", {
+            cls: "wizard-spell-level-card",
+            attr: { tabindex: "0", role: "button", "aria-label": `${levelLabel(lvl)} spells` },
+          });
+          header.createEl("span", { cls: "wizard-spell-level-name", text: levelLabel(lvl) });
+          const badge = header.createEl("span", { cls: "wizard-spell-level-count" });
+          const chevron = header.createEl("span", { cls: "wizard-spell-level-chevron", text: "›" });
+          const body = wrap.createEl("div", { cls: "wizard-spell-level-body" });
+          levelBadges[lvl] = badge;
+
+          const names = byLevel[lvl].slice().sort((a, b) => a.file.basename.localeCompare(b.file.basename));
+          const select = body.createEl("select", {
+            cls: "wizard-spell-select",
+            attr: { multiple: true, size: String(Math.min(Math.max(names.length, 1), 8)) },
+          });
+          for (const sp of names) {
+            const opt = select.createEl("option", { text: sp.file.basename });
+            opt.value = sp.file.basename;
+            if (preselected.has(sp.file.basename)) opt.selected = true;
+          }
+          select.addEventListener("change", commitSelections);
+          levelSelects[lvl] = select;
+          accordionPairs.push({ wrap, header, body, chevron });
+        }
+        wireSpellLevelAccordion(accordionPairs);
+        commitSelections();
       }
       return true;
     };
@@ -16529,6 +21185,37 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
               : "Class Feature",
         }));
         wizardState.featureDraftKey = draftKey;
+
+        // ---- Ability Score Improvement / Feat drafts (bug report #5) ----
+        // Rebuilt in lockstep with the feature list above, for the exact
+        // same reason: the class/subclass/level combo just changed, so
+        // which ASI levels even apply may have changed too (a lower level
+        // chosen on Basics can drop an ASI level this character no longer
+        // reaches). Re-snapshotting abilityRows here - BEFORE any ASI pick
+        // below ever touches them - is what makes recalcAsiAbilityScores
+        // idempotent: every recompute starts from "whatever Page 1 says the
+        // base score is" plus the CURRENT picks, never from whatever an
+        // earlier pick already wrote into the select.
+        wizardState.asiBaseScores = {};
+        for (const r of refs.abilityRows) wizardState.asiBaseScores[r.key] = Number(r.scoreInput.value) || 10;
+        const newAsiDrafts = {};
+        classNames.forEach((cname, idx) => {
+          for (const asiLevel of getAsiLevels(cname)) {
+            if (asiLevel > levelForClass(idx)) continue;
+            const key = `${cname}#${asiLevel}`;
+            newAsiDrafts[key] = wizardState.asiDrafts[key] || {
+              className: cname,
+              level: asiLevel,
+              mode: "asi",
+              firstAbility: "None",
+              secondAbility: "None",
+              featName: "",
+              featDescription: "",
+              featAsiAbility: "None",
+            };
+          }
+        });
+        wizardState.asiDrafts = newAsiDrafts;
       }
 
       const choiceCtx = { className: classNames[0] || "", subclassName: subclasses[0] || "", newLevel: level, app: this.app };
@@ -16537,6 +21224,61 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
       // options() expects straight from Page 1's own skill proficiency
       // checkboxes instead.
       const syntheticAbFm = { skills_list: refs.skillRows.map((r) => ({ name: r.name, prof: r.profCb.checked })) };
+
+      // Recomputes every ability score select on Page 1 (refs.abilityRows)
+      // from wizardState.asiBaseScores (the value Page 1 had before any ASI
+      // pick) plus whatever's currently chosen across every ASI occurrence
+      // below - called after every change to any ASI/Feat picker, same
+      // "recompute from scratch, don't increment in place" approach as
+      // applyStandardArray/recalcPointBuy use for their own methods, so
+      // switching a pick (or switching Ability Score Improvement vs Feat)
+      // never leaves a stale +1 behind from whatever was selected before.
+      const recalcAsiAbilityScores = () => {
+        const totals = {};
+        const caps = {};
+        for (const draft of Object.values(wizardState.asiDrafts)) {
+          if (draft.mode === "feat") {
+            if (draft.featAsiAbility && draft.featAsiAbility !== "None") {
+              const k = draft.featAsiAbility.toLowerCase();
+              totals[k] = (totals[k] || 0) + 1;
+              // An Epic Boon's own higher cap (30, see parseFeatAsiOptions)
+              // only ever applies to the ability IT raises - picking the
+              // boon for CHA doesn't also raise STR's cap, so this only
+              // ever widens caps[k] for the one ability this feat named.
+              caps[k] = Math.max(caps[k] || 20, draft.featAsiCap || 20);
+            }
+          } else {
+            for (const v of [draft.firstAbility, draft.secondAbility]) {
+              if (v && v !== "None") {
+                const k = v.toLowerCase();
+                totals[k] = (totals[k] || 0) + 1;
+              }
+            }
+          }
+        }
+        for (const r of refs.abilityRows) {
+          const base = wizardState.asiBaseScores[r.key] ?? (Number(r.scoreInput.value) || 10);
+          const cap = caps[r.key] || 20;
+          const next = Math.min(cap, base + (totals[r.key] || 0));
+          const nextStr = String(next);
+          if (nextStr !== r.scoreInput.value) {
+            // r.scoreInput's own <option>s only ever go up to 20 (see
+            // abilityRows' ABILITY_SCORE_OPTIONS in buildCharSheetFields) -
+            // an Epic Boon's 30-cap can legitimately need a value past
+            // that, and setting .value to something with no matching
+            // <option> just silently fails on a native <select>, so a
+            // missing one is added on demand here (mirrors that same
+            // function's own "unshift the current value if it isn't in
+            // the list" fallback for a pre-existing out-of-range score).
+            if (!Array.from(r.scoreInput.options).some((o) => o.value === nextStr)) {
+              const opt = r.scoreInput.createEl("option", { text: nextStr });
+              opt.value = nextStr;
+            }
+            r.scoreInput.value = nextStr;
+            r.scoreInput.dispatchEvent(new Event("change"));
+          }
+        }
+      };
 
       // Plain read-only display, same convention as Update Character
       // Sheet's own Features page (see the matching comment there) and the
@@ -16583,28 +21325,54 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
             text: `Ancestry: ${(draft._chosen && draft._chosen[0]) || "(not chosen yet)"} - change this on the Basics page, right after Race.`,
           });
         } else if (choiceDef) {
-          const options = typeof choiceDef.options === "function" ? choiceDef.options({ ...choiceCtx, abilitiesFm: syntheticAbFm }) : choiceDef.options;
-          const count = typeof choiceDef.count === "function" ? choiceDef.count(choiceCtx) : choiceDef.count;
-          const describeMap = typeof choiceDef.describe === "function" ? choiceDef.describe({ ...choiceCtx, abilitiesFm: syntheticAbFm }) : choiceDef.describe;
           choiceBlock = listEl.createEl("div", { cls: "feature-desc-block feature-choice-block" });
-          choiceBlock.createEl("div", {
-            cls: "condition-desc",
-            text: `Choose ${count}${choiceDef.hint ? " - " + choiceDef.hint : ""}:`,
-          });
-          const select = choiceBlock.createEl("select", {
-            cls: "feature-choice-select",
-            attr: { multiple: true, size: String(Math.min(options.length, 6)) },
-          });
-          const priorSet = new Set(draft._chosen || []);
-          for (const o of options) {
-            const opt = select.createEl("option", { text: o });
-            opt.value = o;
-            if (priorSet.has(o)) opt.selected = true;
-            if (describeMap && describeMap[o]) opt.title = describeMap[o];
+          if (choiceDef.renderPicker) {
+            // A def can supply its own renderPicker (e.g. "magic initiate" -
+            // see FEATURE_CHOICE_DEFS) instead of the plain options/count
+            // multi-select below, for a choice that needs more structure
+            // than "pick N from one flat list". draft._chosen stays a flat
+            // array of the final picks either way, so nothing downstream
+            // that reads it needs to know which path rendered it.
+            choiceDef.renderPicker(choiceBlock, {
+              ctx: { ...choiceCtx, abilitiesFm: syntheticAbFm },
+              initialChosen: draft._chosen || [],
+              onChosenChange: (next) => {
+                draft._chosen = next;
+              },
+            });
+          } else {
+            const options = typeof choiceDef.options === "function" ? choiceDef.options({ ...choiceCtx, abilitiesFm: syntheticAbFm }) : choiceDef.options;
+            const count = typeof choiceDef.count === "function" ? choiceDef.count(choiceCtx) : choiceDef.count;
+            const describeMap = typeof choiceDef.describe === "function" ? choiceDef.describe({ ...choiceCtx, abilitiesFm: syntheticAbFm }) : choiceDef.describe;
+            choiceBlock.createEl("div", {
+              cls: "condition-desc",
+              text: `Choose ${count}${choiceDef.hint ? " - " + choiceDef.hint : ""}:`,
+            });
+            const select = choiceBlock.createEl("select", {
+              cls: "feature-choice-select",
+              attr: { multiple: true, size: String(Math.min(options.length, 6)) },
+            });
+            const priorSet = new Set(draft._chosen || []);
+            for (const o of options) {
+              const opt = select.createEl("option", { text: o });
+              opt.value = o;
+              if (priorSet.has(o)) opt.selected = true;
+              if (describeMap && describeMap[o]) opt.title = describeMap[o];
+            }
+            // Only shown when this feature actually needs more than one
+            // pick - a count-of-1 choice (Fighting Style, Divine Order,
+            // etc.) never needs the modifier key at all, so telling the
+            // player to hold one would just be confusing/wrong for those.
+            if ((Number(count) || 0) > 1) {
+              choiceBlock.createEl("div", {
+                cls: "feature-choice-hint",
+                text: "Ctrl/Cmd-click (or shift-click) to select more than one.",
+              });
+            }
+            select.addEventListener("change", () => {
+              draft._chosen = Array.from(select.selectedOptions).map((o) => o.value);
+            });
           }
-          select.addEventListener("change", () => {
-            draft._chosen = Array.from(select.selectedOptions).map((o) => o.value);
-          });
         }
 
         delBtn.onclick = () => {
@@ -16642,6 +21410,194 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
         renderRow(draft);
       }
 
+      // ---- Ability Score Improvement / Feat (bug report #5) ----
+      // One block per class/level pair in wizardState.asiDrafts (populated
+      // whenever the feature draft above is rebuilt) - a character created
+      // directly at, say, level 8 needs this choice made twice (at levels 4
+      // and 8), the same two choices two separate trips through the Level
+      // Up modal would have asked for one at a time. This mirrors that
+      // modal's own "Increase ability scores" vs "Take a Feat instead"
+      // picker (see openLevelUpModal) as closely as this read-mostly page's
+      // layout allows, so the two behave the same way almost everywhere.
+      const asiOccurrences = Object.values(wizardState.asiDrafts).sort(
+        (a, b) => a.level - b.level || a.className.localeCompare(b.className)
+      );
+      if (asiOccurrences.length) {
+        listEl.createEl("div", { cls: "stat-subheader", text: "Ability Score Improvement" });
+        // A non-repeatable feat already granted by the Background's own
+        // Origin Feat (the only other source of a Feat-category entry at
+        // this point in character creation - see getBackgroundExtraFeatures
+        // above) isn't offered again here, same "don't offer it twice"
+        // reasoning as the Level Up modal's own existingFeatNames, just
+        // sourced from this in-progress feature draft instead of an
+        // already-saved Features file (this character doesn't have one
+        // yet - it doesn't exist until Create).
+        const existingFeatNames = new Set(
+          wizardState.featureDraft.filter((d) => !d.deleted && d.category === "Feat").map((d) => String(d.name || "").trim())
+        );
+        for (const draft of asiOccurrences) {
+          const block = listEl.createEl("div", { cls: "feature-desc-block feature-choice-block" });
+          block.createEl("div", { cls: "stat-subheader", text: `${draft.className} - Level ${draft.level}` });
+          const modeRow = block.createEl("div", { cls: "action-modal-row" });
+          const radioName = `asi-mode-${draft.className}-${draft.level}`.replace(/\s+/g, "_");
+          const asiLabel = modeRow.createEl("label", { cls: "checklist-item" });
+          const asiRadio = asiLabel.createEl("input", { type: "radio", attr: { name: radioName } });
+          asiRadio.checked = draft.mode === "asi";
+          asiLabel.appendText(" Increase ability scores");
+          const featLabel = modeRow.createEl("label", { cls: "checklist-item" });
+          const featRadio = featLabel.createEl("input", { type: "radio", attr: { name: radioName } });
+          featRadio.checked = draft.mode === "feat";
+          featLabel.appendText(" Take a Feat instead");
+
+          const abilityOpts = ["None", ...refs.abilityRows.map((r) => r.key.toUpperCase())];
+          const asiBlock = block.createEl("div");
+          const buildAbilitySelect = (current) => {
+            const row = asiBlock.createEl("div", { cls: "action-modal-row" });
+            row.createEl("span", { cls: "action-modal-label", text: "Increase (+1)" });
+            const select = row.createEl("select");
+            for (const o of abilityOpts) {
+              const opt = select.createEl("option", { text: o });
+              opt.value = o;
+              if (o === current) opt.selected = true;
+            }
+            return select;
+          };
+          const firstSelect = buildAbilitySelect(draft.firstAbility);
+          const secondSelect = buildAbilitySelect(draft.secondAbility);
+          asiBlock.createEl("div", {
+            cls: "condition-desc",
+            text: "Pick the same ability twice for +2 to one score, or two different abilities for +1 each. Scores are capped at 20.",
+          });
+
+          // Feats picker, sourced from the vault's own Rysy (Feats) library
+          // (allFeatNotes, read once up front by openNewCharacterModal) -
+          // General feats always, plus Epic Boons specifically at level 19,
+          // matching the 2024 rules' own framing of level 19 (see
+          // ASI_LEVELS' comment). Deliberately no "Custom / homebrew feat"
+          // freeform option here, unlike the Level Up modal's version - a
+          // custom feat picked this early has no description to show and
+          // nothing yet to apply an ASI from, so it's simpler for the
+          // wizard to just ask for it via "+ Add Feature" below instead
+          // (same as any other hand-typed feature) if it's not in the
+          // library.
+          const featBlock = block.createEl("div");
+          const featPickRow = featBlock.createEl("div", { cls: "action-modal-row" });
+          featPickRow.createEl("span", { cls: "action-modal-label", text: "Feat" });
+          const featSelect = featPickRow.createEl("select", { cls: "action-modal-name" });
+          const customOpt = featSelect.createEl("option", { text: "— Choose a feat —" });
+          customOpt.value = "";
+          const eligibleFeats = allFeatNotes
+            .filter((ft) => ft.category === "General" || (ft.category === "Epic Boon" && draft.level === 19))
+            .filter((ft) => ft.repeatable || !existingFeatNames.has(ft.nameEn))
+            .sort((a, b) => a.nameEn.localeCompare(b.nameEn));
+          const generalFeats = eligibleFeats.filter((ft) => ft.category === "General");
+          const boonFeats = eligibleFeats.filter((ft) => ft.category === "Epic Boon");
+          if (generalFeats.length) {
+            const group = featSelect.createEl("optgroup", { attr: { label: "General Feats" } });
+            for (const ft of generalFeats) {
+              const opt = group.createEl("option", { text: ft.nameEn });
+              opt.value = ft.name;
+              if (ft.nameEn === draft.featName) opt.selected = true;
+            }
+          }
+          if (boonFeats.length) {
+            const group = featSelect.createEl("optgroup", { attr: { label: "Epic Boons" } });
+            for (const ft of boonFeats) {
+              const opt = group.createEl("option", { text: ft.nameEn });
+              opt.value = ft.name;
+              if (ft.nameEn === draft.featName) opt.selected = true;
+            }
+          }
+          const featDescBlock = featBlock.createEl("div", { cls: "feature-desc-static" });
+          const featPrereqNote = featBlock.createEl("div", { cls: "condition-desc" });
+          const featAsiRow = featBlock.createEl("div", { cls: "action-modal-row" });
+          featAsiRow.createEl("span", { cls: "action-modal-label", text: "Increase (+1)" });
+          const featAsiSelect = featAsiRow.createEl("select");
+
+          const refreshFeatDetail = () => {
+            const picked = eligibleFeats.find((ft) => ft.name === featSelect.value);
+            featAsiSelect.empty();
+            if (!picked) {
+              draft.featName = "";
+              draft.featDescription = "";
+              draft.featAsiAbility = "None";
+              featDescBlock.setText("");
+              featPrereqNote.setText("");
+              featAsiRow.style.display = "none";
+              return;
+            }
+            draft.featName = picked.nameEn;
+            draft.featDescription = picked.descriptionEn;
+            featDescBlock.setText(picked.descriptionEn);
+            featPrereqNote.setText(picked.prereqEn ? `Prerequisite: ${picked.prereqEn}` : "");
+            const { abilities, max } = parseFeatAsiOptions(picked.asiText);
+            // Epic Boons (only offerable at level 19 - see eligibleFeats'
+            // own filter above) cap at 30 instead of 20, same as the Level
+            // Up modal's own featAsiRow - stashed on the draft so
+            // recalcAsiAbilityScores can look it up per-ability instead of
+            // assuming every pick here caps at the ordinary 20.
+            draft.featAsiCap = max;
+            if (abilities.length) {
+              featAsiRow.style.display = "";
+              featAsiSelect.dataset.max = String(max);
+              const noneOpt = featAsiSelect.createEl("option", { text: "None" });
+              noneOpt.value = "None";
+              for (const k of abilities) {
+                const opt = featAsiSelect.createEl("option", { text: k.toUpperCase() });
+                opt.value = k.toUpperCase();
+              }
+              featAsiSelect.value = abilities.length === 1 ? abilities[0].toUpperCase() : draft.featAsiAbility || "None";
+              draft.featAsiAbility = featAsiSelect.value;
+            } else {
+              featAsiRow.style.display = "none";
+              draft.featAsiAbility = "None";
+            }
+          };
+          featSelect.addEventListener("change", () => {
+            refreshFeatDetail();
+            recalcAsiAbilityScores();
+          });
+          featAsiSelect.addEventListener("change", () => {
+            draft.featAsiAbility = featAsiSelect.value;
+            recalcAsiAbilityScores();
+          });
+
+          const setModeVisibility = () => {
+            asiBlock.style.display = draft.mode === "asi" ? "" : "none";
+            featBlock.style.display = draft.mode === "feat" ? "" : "none";
+          };
+          asiRadio.addEventListener("change", () => {
+            draft.mode = "asi";
+            setModeVisibility();
+            recalcAsiAbilityScores();
+          });
+          featRadio.addEventListener("change", () => {
+            draft.mode = "feat";
+            setModeVisibility();
+            recalcAsiAbilityScores();
+          });
+          firstSelect.addEventListener("change", () => {
+            draft.firstAbility = firstSelect.value;
+            recalcAsiAbilityScores();
+          });
+          secondSelect.addEventListener("change", () => {
+            draft.secondAbility = secondSelect.value;
+            recalcAsiAbilityScores();
+          });
+
+          setModeVisibility();
+          if (draft.featName) {
+            // Round-tripping through Back/Next on the wizard - pre-select
+            // whatever vault feat this draft already points at before the
+            // detail refresh below reads featSelect.value back out of it.
+            const match = eligibleFeats.find((ft) => ft.nameEn === draft.featName);
+            if (match) featSelect.value = match.name;
+          }
+          refreshFeatDetail();
+        }
+      }
+      recalcAsiAbilityScores();
+
       // A hand-typed feature still needs its name/description entered
       // somewhere - since the page above is read-only, that happens in a
       // small popup instead of inline fields (see the matching comment on
@@ -16672,17 +21628,31 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
       // Quick-insert for homebrew features saved in Settings > D&D 2024
       // Character Sheet > Homebrew Content - only shown once at least one
       // exists, so this row doesn't clutter the page for anyone who hasn't
-      // added any.
-      if (HOMEBREW.features.length) {
+      // added any. Filtered through the same Home page 3rd Party Content
+      // filter as the Class/Species/Subclass/Background pickers above
+      // (buildFeaturesPage is rebuilt fresh every time this page is
+      // (re)entered - see goToStep - so it always reflects whatever the
+      // filter is currently set to without needing its own change
+      // listeners). Features have no SRD-vs-all concept (SRD_* above only
+      // covers races/classes/subclasses/backgrounds/spells), so contentLevel
+      // never factors in here - only thirdPartyEnabled/enabledBooks do.
+      // No outer `thirdPartyEnabled ? ... : []` short-circuit here anymore
+      // (bug report #1) - that used to drop Eberron's own homebrew features
+      // to zero options the instant the blanket switch was off, bypassing
+      // shouldShowBook's own ALWAYS_VISIBLE_HOMEBREW_BOOKS carve-out above
+      // entirely. shouldShowBook already re-checks thirdPartyEnabled itself
+      // for every other book, so nothing non-Eberron becomes newly visible.
+      const visibleHomebrewFeatures = HOMEBREW.features.filter((hf) => shouldShowBook(getHomebrewBookLabel(hf)));
+      if (visibleHomebrewFeatures.length) {
         const hbRow = page4El.createEl("div", { cls: "action-modal-row" });
         const hbSelect = hbRow.createEl("select", { cls: "action-modal-name" });
-        for (const hf of HOMEBREW.features) {
+        for (const hf of visibleHomebrewFeatures) {
           const opt = hbSelect.createEl("option", { text: hf.name });
           opt.value = hf.name;
         }
         const hbAddBtn = hbRow.createEl("button", { cls: "action-btn-update", text: "+ Insert Homebrew Feature" });
         hbAddBtn.onclick = () => {
-          const hf = HOMEBREW.features.find((f) => f.name === hbSelect.value);
+          const hf = visibleHomebrewFeatures.find((f) => f.name === hbSelect.value);
           if (!hf) return;
           const draft = {
             name: hf.name,
@@ -16721,6 +21691,7 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
     const navRow = modal.createEl("div", { cls: "action-modal-btnrow action-modal-btnrow-split" });
 
     const STEP_ELS = {
+      home: homePageEl,
       class: classPageEl,
       background: backgroundPageEl,
       species: speciesPageEl,
@@ -16730,22 +21701,23 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
       features: page4El,
     };
     const STEP_LABELS = {
-      class: "1. Class",
-      background: "2. Background",
-      species: "3. Species",
-      abilities: "4. Abilities",
+      home: "1. Home",
+      class: "2. Class",
+      background: "3. Background",
+      species: "4. Species",
+      abilities: "5. Abilities",
       spells: "Spells",
-      equipment: "5. Equipment",
-      features: "6. Features",
+      equipment: "6. Equipment",
+      features: "7. Features",
     };
 
-    let currentPage = "class";
+    let currentPage = "home";
     let hasSpellsPage = false;
 
     const stepKeys = () =>
       hasSpellsPage
-        ? ["class", "background", "species", "abilities", "spells", "equipment", "features"]
-        : ["class", "background", "species", "abilities", "equipment", "features"];
+        ? ["home", "class", "background", "species", "abilities", "spells", "equipment", "features"]
+        : ["home", "class", "background", "species", "abilities", "equipment", "features"];
 
     // Cheap, DOM-free re-check of "does at least one currently-chosen
     // class/subclass need a fixed spell pick" (same qualifying test
@@ -16846,6 +21818,33 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
 
       const { classNames, subclasses, classLevels, level } = collectClassSelections();
 
+      // A Feat chosen on the Features page's own "Ability Score
+      // Improvement" section (see buildFeaturesPage, bug report #5) isn't
+      // tracked in wizardState.featureDraft itself - it lives in
+      // wizardState.asiDrafts instead, so a pick there never fights with a
+      // same-array edit a plain feature row might also be mid-making.
+      // Folded in here, once, right before it's actually saved - same
+      // "Feat" category and shape the Level Up modal's own "Take a Feat
+      // instead" pick uses (see openLevelUpModal's confirmedFeatures),
+      // including the "Also an Action" flag no feat from this library
+      // needs. A pure ASI pick (abilities only, no feat) needs no entry
+      // here at all - its effect already landed in abilityScores above via
+      // recalcAsiAbilityScores continuously updating refs.abilityRows.
+      const asiFeatEntries = Object.values(wizardState.asiDrafts)
+        .filter((d) => d.mode === "feat" && d.featName)
+        .map((d) => ({
+          name: d.featName,
+          description: d.featDescription || "",
+          max: 0,
+          used: 0,
+          rest: "Long",
+          pool: false,
+          deleted: false,
+          _base: d.featDescription || "",
+          _chosen: [],
+          category: "Feat",
+        }));
+
       await this.createNewCharacterSheet({
         name: characterName,
         race: refs.raceSelect.value,
@@ -16871,7 +21870,7 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
         skills,
         spellSelections: wizardState.spellSelections,
         gearItems: wizardState.gearItems,
-        featureDraft: wizardState.featureDraft || [],
+        featureDraft: [...(wizardState.featureDraft || []), ...asiFeatEntries],
         languages: refs.languageCheckboxes.filter((l) => l.cb.checked).map((l) => l.name),
       });
 
@@ -16909,7 +21908,7 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
     renderTabs();
     renderNav();
 
-    document.body.appendChild(overlay);
+    activeDocument.body.appendChild(overlay);
     window.setTimeout(() => nameInput.focus(), 0);
   }
 
@@ -17161,8 +22160,8 @@ tags:
     }
 
     // Note: classes that prepare their leveled spells from their whole
-    // class list (FULL_LIST_PREPARE_CLASSES: Cleric, Druid, Paladin
-    // - see spellChoiceModeFor's "prepare" mode) used to get a
+    // class list (FULL_LIST_PREPARE_CLASSES: Cleric, Druid, Paladin,
+    // Artificer - see spellChoiceModeFor's "prepare" mode) used to get a
     // best-effort reference list of every accessible spell auto-added here
     // on creation. That's gone as of 2026-09-14: the wizard's Spells page
     // now offers these classes a real picker (capped by
@@ -17215,6 +22214,166 @@ tags:
     // writing to the exact file this just created - the existing "Create
     // Character sheet" wizard button ignores this return value entirely,
     // so adding it is safe.
+    return newFile;
+  }
+
+  // Called from Homebrew Content > Items' "+ Create Homebrew Item Note"
+  // button (see openHomebrewItemWizard's onDone callback in the settings
+  // tab). Unlike the four openHomebrew*Wizard mechanics, this doesn't touch
+  // data.json at all - it writes a real vault note, formatted exactly like
+  // the rest of the item library (see buildHomebrewItemNote and this
+  // project's claude/item-schema.md), filed into a rarity subfolder under
+  // settings.itemLibraryFolder - e.g. "<itemLibraryFolder>/Rare/Flame
+  // Tongue.md" - mirroring the library's own Předměty/<Rarity>/ layout so
+  // homebrew items sit right alongside official ones (per the user's
+  // "mix into existing folders" choice for where homebrew items should go).
+  async createHomebrewItemNote(data) {
+    const libraryFolder = (this.settings && this.settings.itemLibraryFolder) || "";
+    if (!libraryFolder) {
+      new Notice('Set an "Item library folder" in this plugin\'s settings first (Homebrew Content > Items).');
+      return null;
+    }
+    const rarityFolder = `${libraryFolder}/${data.rarity}`;
+
+    // Create each path segment that doesn't exist yet, same defensive
+    // try/catch-and-ignore pattern createNewCharacterSheet uses above (a
+    // concurrent process may create the same folder first).
+    let builtPath = "";
+    for (const segment of rarityFolder.split("/").filter(Boolean)) {
+      builtPath = builtPath ? `${builtPath}/${segment}` : segment;
+      if (!this.app.vault.getAbstractFileByPath(builtPath)) {
+        try {
+          await this.app.vault.createFolder(builtPath);
+        } catch (e) {
+          // Folder may already exist (race with another process) - ignore.
+        }
+      }
+    }
+
+    const safeBaseName = (data.name || "Homebrew Item").replace(/[\\/:*?"<>|]/g, "").trim() || "Homebrew Item";
+    let fileName = safeBaseName;
+    let filePath = `${rarityFolder}/${fileName}.md`;
+    let counter = 2;
+    while (this.app.vault.getAbstractFileByPath(filePath)) {
+      fileName = `${safeBaseName} (${counter})`;
+      filePath = `${rarityFolder}/${fileName}.md`;
+      counter++;
+    }
+
+    const noteContent = buildHomebrewItemNote(data);
+    let newFile;
+    try {
+      newFile = await this.app.vault.create(filePath, noteContent);
+    } catch (e) {
+      new Notice(`Couldn't create item note: ${e && e.message ? e.message : e}`);
+      return null;
+    }
+
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(newFile);
+    new Notice(`Created homebrew item: ${fileName}`);
+    return newFile;
+  }
+
+  // Called from Homebrew Content > Feats' "+ Create Homebrew Feat Note"
+  // button - same shape of method as createHomebrewItemNote above, but
+  // filing into a category subfolder (see FEAT_CATEGORIES) under
+  // settings.featLibraryFolder instead of a rarity subfolder, and using the
+  // note's own bilingual "Czech Name (English Name)" filename convention
+  // (see buildHomebrewFeatNote/getAllFeatNotes) instead of a single name.
+  async createHomebrewFeatNote(data) {
+    const libraryFolder = (this.settings && this.settings.featLibraryFolder) || "";
+    if (!libraryFolder) {
+      new Notice('Set a "Feat library folder" in this plugin\'s settings first (Homebrew Content > Feats).');
+      return null;
+    }
+    const cat = FEAT_CATEGORIES[data.category] || FEAT_CATEGORIES.General;
+    const categoryFolder = `${libraryFolder}/${cat.folder}`;
+
+    let builtPath = "";
+    for (const segment of categoryFolder.split("/").filter(Boolean)) {
+      builtPath = builtPath ? `${builtPath}/${segment}` : segment;
+      if (!this.app.vault.getAbstractFileByPath(builtPath)) {
+        try {
+          await this.app.vault.createFolder(builtPath);
+        } catch (e) {
+          // Folder may already exist (race with another process) - ignore.
+        }
+      }
+    }
+
+    const safeBaseName = `${data.nameCz} (${data.nameEn})`.replace(/[\\/:*?"<>|]/g, "").trim() || "Homebrew Feat";
+    let fileName = safeBaseName;
+    let filePath = `${categoryFolder}/${fileName}.md`;
+    let counter = 2;
+    while (this.app.vault.getAbstractFileByPath(filePath)) {
+      fileName = `${safeBaseName} (${counter})`;
+      filePath = `${categoryFolder}/${fileName}.md`;
+      counter++;
+    }
+
+    const noteContent = buildHomebrewFeatNote(data);
+    let newFile;
+    try {
+      newFile = await this.app.vault.create(filePath, noteContent);
+    } catch (e) {
+      new Notice(`Couldn't create feat note: ${e && e.message ? e.message : e}`);
+      return null;
+    }
+
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(newFile);
+    new Notice(`Created homebrew feat: ${fileName}`);
+    return newFile;
+  }
+
+  // Called from Homebrew Content > Monsters' "+ Create Homebrew Monster
+  // Note" button - same shape of method as createHomebrewItemNote above,
+  // but filing flat into settings.monsterLibraryFolder (no rarity/category
+  // subfolder - real vault convention keeps all homebrew monsters together
+  // in one "Homebrew Příšery"-style folder regardless of type, per
+  // vault-map.md) using the monster's own name for the filename.
+  async createHomebrewMonsterNote(data) {
+    const libraryFolder = (this.settings && this.settings.monsterLibraryFolder) || "";
+    if (!libraryFolder) {
+      new Notice('Set a "Monster library folder" in this plugin\'s settings first (Homebrew Content > Monsters).');
+      return null;
+    }
+
+    let builtPath = "";
+    for (const segment of libraryFolder.split("/").filter(Boolean)) {
+      builtPath = builtPath ? `${builtPath}/${segment}` : segment;
+      if (!this.app.vault.getAbstractFileByPath(builtPath)) {
+        try {
+          await this.app.vault.createFolder(builtPath);
+        } catch (e) {
+          // Folder may already exist (race with another process) - ignore.
+        }
+      }
+    }
+
+    const safeBaseName = (data.name || "Homebrew Monster").replace(/[\\/:*?"<>|]/g, "").trim() || "Homebrew Monster";
+    let fileName = safeBaseName;
+    let filePath = `${libraryFolder}/${fileName}.md`;
+    let counter = 2;
+    while (this.app.vault.getAbstractFileByPath(filePath)) {
+      fileName = `${safeBaseName} (${counter})`;
+      filePath = `${libraryFolder}/${fileName}.md`;
+      counter++;
+    }
+
+    const noteContent = buildHomebrewMonsterNote(data);
+    let newFile;
+    try {
+      newFile = await this.app.vault.create(filePath, noteContent);
+    } catch (e) {
+      new Notice(`Couldn't create monster note: ${e && e.message ? e.message : e}`);
+      return null;
+    }
+
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(newFile);
+    new Notice(`Created homebrew monster: ${fileName}`);
     return newFile;
   }
 
@@ -17299,6 +22458,29 @@ tags:
     const languages = [
       ...new Set(allMods.filter((m) => m.type === "language").map((m) => m.friendlySubtypeName || m.subType).filter(Boolean)),
     ];
+
+    // Armor/weapon/tool proficiencies: same "proficiency" modifier type
+    // already used above for saves/skills, just excluding the subtypes
+    // those two already consumed (ability saves, skills) so nothing
+    // double-counts. There's no fixed subtype list to filter FOR - D&D
+    // Beyond names these after the actual armor/weapon/tool - so this
+    // reuses this sheet's own classifyProficiencyItemCategory() text
+    // classifier (the same one Feat description text-scanning already
+    // relies on, see extractFeatProficiencyGrants) to sort each one into
+    // Armor/Weapons/Tools. Stashed on the main file as
+    // imported_proficiencies for computeAutomaticProficiencies to merge in
+    // on top of its usual class/race/background/feat derivation - see
+    // there - rather than trying to reconcile it with those tables here.
+    const savingThrowSubtypes = new Set(Object.values(ABILITY_KEY_TO_SUBTYPE_WORD).map((w) => `${w}-saving-throws`));
+    const skillSubtypes = new Set(DDB_SKILL_DEFS.map((s) => s.key));
+    const importedProficiencies = { armor: [], weapons: [], tools: [] };
+    for (const m of allMods) {
+      if (m.type !== "proficiency") continue;
+      if (savingThrowSubtypes.has(m.subType) || skillSubtypes.has(m.subType)) continue;
+      const label = m.friendlySubtypeName || m.subType;
+      if (!label) continue;
+      importedProficiencies[classifyProficiencyItemCategory(label)].push(label);
+    }
 
     const classLevels = {};
     if (classes.length > 1) {
@@ -17452,6 +22634,9 @@ tags:
     try {
       await this.app.fileManager.processFrontMatter(newFile, (fm) => {
         fm.dndbeyond_id = char.id;
+        if (importedProficiencies.armor.length || importedProficiencies.weapons.length || importedProficiencies.tools.length) {
+          fm.imported_proficiencies = importedProficiencies;
+        }
       });
     } catch (e) {
       // Non-fatal.
@@ -17468,6 +22653,20 @@ tags:
         const byId = new Map(equippedFlags.map((e) => [e.id, e.equipped]));
         for (const row of ifm.inventory_list || []) {
           if (byId.has(row.id)) row.equipped = byId.get(row.id);
+        }
+        // Currency: D&D Beyond's own {cp, sp, ep, gp, pp} shape, same field
+        // names this sheet already uses for its own currency object (see
+        // openCurrencyModal) - just coerced to numbers defensively in case
+        // any denomination comes back missing.
+        const cur = char.currencies;
+        if (cur && typeof cur === "object") {
+          ifm.currency = {
+            pp: Number(cur.pp) || 0,
+            gp: Number(cur.gp) || 0,
+            ep: Number(cur.ep) || 0,
+            sp: Number(cur.sp) || 0,
+            cp: Number(cur.cp) || 0,
+          };
         }
       });
       await resyncInventoryEffects(this.app, newFile);
