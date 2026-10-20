@@ -31,7 +31,7 @@ The `example-vault/` folder contains a ready-to-use content library that follows
 - **`Spells/`** — all 339 SRD 5.2.1 spells (27 cantrips through 9th level), one note per spell, organized into level folders, formatted for this plugin's Spells tab.
 - **`Monsters/`** — all 330 SRD 5.2.1 monster stat blocks (Aboleth through Zombie, animals included), one note per monster, formatted for the [Fantasy Statblocks](https://github.com/javalent/fantasy-statblocks) plugin convention this vault's Monster tooling expects.
 
-Copy the contents of `example-vault/` into your own vault to get a working, linkable content library out of the box.
+Copy the contents of `example-vault/` into your own vault to get a working, linkable content library out of the box. Download it directly from [`example-vault.zip`](https://github.com/Majsnic/DnD-2024-Character-sheet-plugin/raw/refs/heads/main/example-vault.zip) in this repository, unzip it, and copy its contents into your vault — no need to clone the whole repo just for this.
 
 ### A note on scope
 

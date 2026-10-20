@@ -762,7 +762,14 @@
   right: 0;
   bottom: 0;
   background: rgba(0, 0, 0, 0.6);
-  z-index: 999;
+  /* Every one of these popups can be opened from inside Obsidian's own
+     Settings window (the Homebrew Content wizards live in the plugin's
+     Settings tab) - a plain z-index of 999 sat BELOW that window's own
+     modal-container, forcing the user to minimize Settings to see the
+     popup underneath it. Pushed well above any reasonable Obsidian/theme
+     z-index so this overlay always wins, whichever window it was opened
+     from. */
+  z-index: 9999;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1210,6 +1217,11 @@
 }
 .feature-choice-select option {
   padding: 3px 4px;
+}
+.feature-choice-hint {
+  font-size: 0.75em;
+  color: var(--dnd-dim);
+  margin-top: 4px;
 }
 
 .dnd-sheet .spell-level-header {
@@ -2075,7 +2087,7 @@
   outline: none !important;
 }
 
-/* [!column] wrapping STORY LINE / HISTORIE: was still getting the
+/* [!column] wrapping DĚJOVÁ LINIE / HISTORIE: was still getting the
    flat dnd-sheet card background/padding behind the two buttons -
    make it an invisible layout wrapper like [!row]/[!colstack]. */
 .dnd-sheet .callout[data-callout="column"] {
@@ -2108,7 +2120,7 @@
   border-right: 4px solid white !important;
 }
 
-/* ===== STORY LINE / HISTORIE buttons: these are just [!important]
+/* ===== DĚJOVÁ LINIE / HISTORIE buttons: these are just [!important]
    and [!note] callouts, which already have a nice "button" look
    (border, icon, fold-chevron, mint/grey color) from the Prism-callout
    block in Callouts.css - the blanket rules above strip that from
@@ -2213,6 +2225,71 @@
   width: 100%;
   min-height: 140px;
 }
+/* One collapsible card per spell level (Cantrips, 1st Level, etc.) inside
+   a Spells page section - styled to match this wizard's own Species/Class
+   selection cards (.wizard-card above) so a spell-level "button" reads as
+   the same kind of control, but opens its spell picker INLINE underneath
+   itself (via wireSpellLevelAccordion in main.js) instead of a separate
+   popup, and only one level stays open at a time within a section. */
+.wizard-spell-level-card-wrap {
+  margin-bottom: 8px;
+}
+.wizard-spell-level-card-wrap:last-child {
+  margin-bottom: 0;
+}
+.wizard-spell-level-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--dnd-card, #1b1e27);
+  border: 1px solid var(--dnd-border, #2a2e3a);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.wizard-spell-level-card:hover {
+  border-color: var(--dnd-accent, #c05a4a);
+}
+/* Open state lives on the wrap (wireSpellLevelAccordion toggles
+   .is-open there), not the header itself, so the same modifier can also
+   flatten the header's bottom corners and square them up against the
+   body sitting right underneath - the "stretched into one card" look. */
+.wizard-spell-level-card-wrap.is-open .wizard-spell-level-card {
+  border-color: var(--dnd-accent, #c05a4a);
+  background: color-mix(in srgb, var(--dnd-accent, #c05a4a) 12%, var(--dnd-card, #1b1e27));
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.wizard-spell-level-name {
+  font-weight: 600;
+  color: var(--dnd-text, #d7d9e0);
+  flex: 1 1 auto;
+}
+.wizard-spell-level-count {
+  font-size: 0.78em;
+  color: var(--dnd-dim, #8b8f9c);
+  flex-shrink: 0;
+}
+.wizard-spell-level-chevron {
+  color: var(--dnd-accent, #c05a4a);
+  font-size: 1.1em;
+  flex-shrink: 0;
+}
+/* Hidden by default - wireSpellLevelAccordion sets display:"" on open and
+   "none" on close via inline style, this just supplies the look for
+   whenever it IS showing. Butts directly against the header's now-square
+   bottom corners above it, rounded only at the bottom, so the open
+   header+body together read as one taller card rather than two stacked
+   ones. */
+.wizard-spell-level-body {
+  padding: 10px 12px;
+  background: var(--dnd-card, #1b1e27);
+  border: 1px solid var(--dnd-accent, #c05a4a);
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+}
 .wizard-spell-hint {
   font-size: 0.75em;
   color: var(--dnd-dim);
@@ -2258,6 +2335,24 @@
   justify-content: space-between;
   gap: 8px;
   padding: 2px 4px;
+}
+
+/* ===== Homebrew Content filter block (Create Character wizard's Class
+   page only - see openNewCharacterModal). Same "appended straight to
+   <body>, outside .dnd-sheet" reasoning as .wizard-info-panel/.wizard-topbar
+   below, hence the literal color fallbacks. ===== */
+.wizard-homebrew-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 16px 0;
+  padding: 10px 12px;
+  background: var(--dnd-bg, #14161d);
+  border: 1px solid var(--dnd-border, #2a2e3a);
+  border-radius: 8px;
+}
+.wizard-homebrew-filter .action-modal-row {
+  margin: 0;
 }
 
 /* ===== D&D Beyond-style top bar + name/portrait arrow nav (Create
@@ -2440,7 +2535,10 @@
   right: 0;
   bottom: 0;
   background: rgba(0, 0, 0, 0.65);
-  z-index: 1001;
+  /* Must stay above .action-modal-overlay's own z-index (see that rule's
+     comment) since this confirm popup stacks on top of the wizard it
+     belongs to. */
+  z-index: 10000;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3181,4 +3279,168 @@
   .dnd-sheet[class*="mobile-page-"] .callout[data-callout="stat"] > .callout-content {
     padding: 0 4px 6px !important;
   }
+}
+
+/* ================================================================
+   Character Tracker block (`character-tracker`, 2026-10-13, renamed from
+   `encounter-tracker` + rebuilt as a card grid 2026-10-14) - a GM note's
+   optional Name/Difficulty header, a party-group picker, and a small
+   rectangular card per PC: a big portrait on top - same object-fit:cover,
+   rounded-rectangle treatment as `.overview-right-col img` above (the
+   character sheet's own main portrait, which goes full-width on the
+   mobile layout) rather than a tiny circular icon - with live AC/
+   current-max HP packed underneath. See CharacterTracker in main.js.
+   Works on desktop and mobile (not gated by the mobile-nav media query
+   above). ================================================================ */
+.dnd-sheet .dnd-sheet-character-tracker {
+  background: var(--dnd-card, #23262f);
+  border: 1px solid var(--dnd-border, #383c48);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 10px 0;
+}
+.dnd-sheet .character-tracker-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.dnd-sheet .character-tracker-name-input {
+  flex: 1 1 auto;
+  min-width: 160px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  font-family: 'Cinzel', serif;
+  font-weight: 700;
+  font-size: 1.15em;
+  color: var(--dnd-text, #e8e6df);
+  padding: 2px 0;
+}
+.dnd-sheet .character-tracker-name-input:hover,
+.dnd-sheet .character-tracker-name-input:focus {
+  border-bottom: 1px solid var(--dnd-border, #383c48);
+  outline: none;
+}
+.dnd-sheet .character-tracker-difficulty-input {
+  flex: 0 0 auto;
+  width: 110px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  font-weight: 700;
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--dnd-dim);
+}
+.dnd-sheet .character-tracker-difficulty-input:hover,
+.dnd-sheet .character-tracker-difficulty-input:focus {
+  border-bottom: 1px solid var(--dnd-border, #383c48);
+  outline: none;
+}
+.dnd-sheet .character-tracker-difficulty.difficulty-deadly .character-tracker-difficulty-input { color: #e05a5a; }
+.dnd-sheet .character-tracker-difficulty.difficulty-hard .character-tracker-difficulty-input { color: #e0935a; }
+.dnd-sheet .character-tracker-difficulty.difficulty-medium .character-tracker-difficulty-input { color: #e0cf5a; }
+.dnd-sheet .character-tracker-difficulty.difficulty-easy .character-tracker-difficulty-input { color: #6bbf6b; }
+
+.dnd-sheet .character-tracker-group-select {
+  display: block;
+  margin-bottom: 10px;
+}
+
+/* ---- Card grid - each card is the "small rectangular window" holding
+   everything about one PC. ---- */
+.dnd-sheet .character-tracker-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.dnd-sheet .character-tracker-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 140px;
+  flex: 0 0 140px;
+  background: var(--dnd-bg, #14161d);
+  border: 1px solid var(--dnd-border, #383c48);
+  border-radius: 10px;
+  overflow: hidden;
+}
+/* Big portrait - fills the card's full width, tall enough to read as a
+   real picture rather than an avatar, matching the character sheet's own
+   big portrait on mobile (.overview-right-col, max-height: 220px there). */
+.dnd-sheet .character-tracker-portrait {
+  position: relative;
+  width: 100%;
+  height: 150px;
+  flex: 0 0 auto;
+}
+.dnd-sheet .character-tracker-portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.dnd-sheet .character-tracker-portrait-fallback {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  background: var(--dnd-card, #23262f);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 2.4em;
+  color: var(--dnd-accent, #c9a24b);
+}
+.dnd-sheet .character-tracker-group-tag {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  font-size: 0.6em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--dnd-text, #e8e6df);
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: 4px;
+  padding: 2px 5px;
+}
+.dnd-sheet .character-tracker-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 8px 8px;
+}
+.dnd-sheet .character-tracker-name {
+  font-size: 1.0625em;
+  font-weight: 700;
+  text-align: center;
+  color: var(--29cc-7baa-color, #4C9A52);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.dnd-sheet .character-tracker-stats {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.925em;
+}
+.dnd-sheet .character-tracker-ac {
+  font-weight: 700;
+  color: #ffffff;
+}
+.dnd-sheet .character-tracker-hp-ok { color: #6bbf6b; }
+.dnd-sheet .character-tracker-hp-bloodied { color: #e0935a; }
+.dnd-sheet .character-tracker-hp-dead { color: #e05a5a; font-weight: 700; }
+
+.dnd-sheet .party-group-settings-block {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
 }

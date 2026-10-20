@@ -1,9 +1,9 @@
 {
-  "id": "dnd-2024-character-sheet",
+  "id": "onednd-character-sheet",
   "name": "D&D 2024 Character Sheet",
   "version": "1.1.0",
   "minAppVersion": "1.0.0",
-  "description": "Automated D&D character sheet version 2024, like DnDBeyond inside Obsidian.",
+  "description": "Build and manage a fully automated Dungeons & Dragons 2024 character sheet directly inside Obsidian.",
   "author": "Custom",
   "isDesktopOnly": false
 }
