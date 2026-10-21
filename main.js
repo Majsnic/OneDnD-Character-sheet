@@ -18,7 +18,7 @@ const CONDITION_INFO = {
   "Prone": { text: "Disadvantage on attacks; melee attacks vs you have advantage" },
   "Restrained": { text: "Speed 0; disadvantage on attacks/DEX saves; attacks vs you have advantage" },
   "Stunned": { text: "Speed 0, incapacitated; auto-fail STR/DEX saves; attacks vs you have advantage" },
-  "Suprised": { text: "Can't move or take an action/reaction on your first turn" },
+  "Surprised": { text: "Can't move or take an action/reaction on your first turn" },
   "Unconscious": { text: "Speed 0, incapacitated, prone; auto-fail STR/DEX saves; hits within 5 ft crit" },
 };
 
@@ -3061,40 +3061,6 @@ const DEFAULT_CHARACTER_BODY_LINES = [
   ">> </div>",
   "",
   "---",
-  "",
-  "> [!quote|no-t]",
-  "> A short, evocative line capturing who this character is.",
-  "",
-  "> [!column|flex 2]",
-  ">> [!important]- D\u011aJOV\u00c1 LINIE:",
-  ">> ```base",
-  ">> properties:",
-  ">>   file.name:",
-  ">>     displayName: Name",
-  ">> views:",
-  ">>   - type: table",
-  ">>     name: Name",
-  ">>     filters:",
-  ">>       and:",
-  ">>         - file.inFolder(\"Dungeons & Dragons/01. Kampa\u0148/2. Hr\u00e1\u010di/\u00dakoly\")",
-  ">>         - file.hasLink(this.file)",
-  ">>     order:",
-  ">>       - file.name",
-  ">> ```",
-  ">",
-  ">> [!note]- HISTORIE",
-  ">> ```base",
-  ">> properties:",
-  ">>   file.name:",
-  ">>     displayName: Name",
-  ">> views:",
-  ">>   - type: table",
-  ">>     name: Session Notes",
-  ">>     filters:",
-  ">>       and:",
-  ">>         - file.inFolder(\"Dungeons & Dragons/01. Kampa\u0148/1. Master Plan/Den\u00edk\")",
-  ">>         - file.hasLink(this.file)",
-  ">> ```",
   "",
   "# Backstory",
   "Write the character's backstory here.",
@@ -9884,7 +9850,7 @@ async function getAllFeatNotes(app) {
   const results = [];
   for (const f of files) {
     if (isTemplateNote(app, f)) continue;
-    if (f.basename === ASI_LEVEL_UP_EXCLUDED_FEAT_NAME) continue;
+    if (f.basename === ASI_LEVEL_UP_EXCLUDED_FEAT_NAME || f.basename === "Ability Score Improvement") continue;
     const cache = app.metadataCache.getFileCache(f);
     if (!cache) continue;
     const tags = getAllTags(cache) || [];
@@ -9895,23 +9861,31 @@ async function getAllFeatNotes(app) {
     } catch (e) {
       continue;
     }
-    // Feat notes translated for English character-sheet display (2026-09-16)
-    // have an appended "## English" section after the Czech reference
-    // content's #Feat tag - split those apart first so the Czech-content
-    // regexes below never see the English text (and vice versa).
+    // Two label conventions are supported here. The original one (built for
+    // Majna's own bilingual vault, see generate_feats.py) writes Czech
+    // "**Label:**" lines in the main body, with an optional appended
+    // "## English" section (split off by engSplitMatch below) carrying the
+    // English prereq/description, and relies on a "Czech Name (English
+    // Name)" filename to get an English display name. That convention does
+    // not fit a plain English-only vault - like this plugin's own example
+    // vault, or any other non-Czech user's - so the same fields are also
+    // read directly off plain English "**Label:**" lines (checked first,
+    // Czech as the fallback) and the English name just falls back to the
+    // note's own basename when there's no "(...)" suffix to extract from.
     const engSplitMatch = /\n---\n## English\n/.exec(content);
     const czechRaw = engSplitMatch ? content.slice(0, engSplitMatch.index) : content;
     const englishRaw = engSplitMatch ? content.slice(engSplitMatch.index + engSplitMatch[0].length) : "";
 
-    const typLine = /\*\*Typ:\*\*\s*(.+)/.exec(czechRaw);
+    const raw = czechRaw.replace(/^---\n[\s\S]*?\n---\n+/, "");
+    const typLine = /\*\*Type:\*\*\s*(.+)/.exec(raw) || /\*\*Typ:\*\*\s*(.+)/.exec(raw);
     const typText = typLine ? typLine[1] : "";
     let category = "General";
-    if (/Rys z počátku/.test(typText)) category = "Origin";
-    else if (/Rys bojového stylu/.test(typText)) category = "Fighting Style";
-    else if (/Epický dar/.test(typText)) category = "Epic Boon";
-    const prereqLine = /\*\*Předpoklad:\*\*\s*(.+)/.exec(czechRaw);
-    const repeatLine = /\*\*Opakovatelný:\*\*\s*(.+)/.exec(czechRaw);
-    const asiLine = /\*\*Zvýšení vlastnosti:\*\*\s*(.+)/.exec(czechRaw);
+    if (/Origin Feat/i.test(typText) || /Rys z počátku/.test(typText)) category = "Origin";
+    else if (/Fighting Style/i.test(typText) || /Rys bojového stylu/.test(typText)) category = "Fighting Style";
+    else if (/Epic Boon/i.test(typText) || /Epický dar/.test(typText)) category = "Epic Boon";
+    const prereqLine = /\*\*Prerequisite:\*\*\s*(.+)/.exec(raw) || /\*\*Předpoklad:\*\*\s*(.+)/.exec(raw);
+    const repeatLine = /\*\*Repeatable:\*\*\s*(.+)/.exec(raw) || /\*\*Opakovatelný:\*\*\s*(.+)/.exec(raw);
+    const asiLine = /\*\*Ability Score Increase:\*\*\s*(.+)/.exec(raw) || /\*\*Zvýšení vlastnosti:\*\*\s*(.+)/.exec(raw);
     // The description shown/copied for a picked feat is the note body
     // minus any leading YAML frontmatter block (homebrew notes only, see
     // buildHomebrewFeatNote - official library notes have none, so this is
@@ -9919,14 +9893,17 @@ async function getAllFeatNotes(app) {
     // source citation + #Feat tag - those are either redundant with what
     // the picker already shows separately (prereq) or not meaningful
     // outside the note itself (source, tag).
-    let body = czechRaw
-      .replace(/^---\n[\s\S]*?\n---\n+/, "")
-      .replace(/^#[^\n]*\n/, "");
+    let body = raw.replace(/^#[^\n]*\n/, "");
     body = body
+      .replace(/\*\*Type:\*\*[^\n]*\n?/, "")
+      .replace(/\*\*Prerequisite:\*\*[^\n]*\n?/, "")
+      .replace(/\*\*Repeatable:\*\*[^\n]*\n?/, "")
+      .replace(/\*\*Ability Score Increase:\*\*[^\n]*\n?/, "")
       .replace(/\*\*Typ:\*\*[^\n]*\n?/, "")
       .replace(/\*\*Předpoklad:\*\*[^\n]*\n?/, "")
       .replace(/\*\*Opakovatelný:\*\*[^\n]*\n?/, "")
       .replace(/\*\*Zvýšení vlastnosti:\*\*[^\n]*\n?/, "")
+      .replace(/\*Source:[^*]*\*/, "")
       .replace(/\*Zdroj:[^*]*\*/, "")
       // Strips the trailing "#Feat" tag line so it never leaks into the
       // picker-shown description (kept as a run-of-tags stripper, not an
@@ -9934,12 +9911,12 @@ async function getAllFeatNotes(app) {
       .replace(/(?:#\w+\s*)+$/, "")
       .trim();
 
-    // English display fields: the name comes from the note's established
-    // "Czech Name (English Name)" bilingual filename convention (no new
-    // content needed), while prereq/description come from the appended
-    // "## English" section. Notes without that section (shouldn't happen
-    // for the 154 Rysy library feats, but kept as a safe fallback) fall
-    // back to the Czech fields so nothing breaks.
+    // English display fields: for a bilingual note the name comes from the
+    // established "Czech Name (English Name)" filename convention, with
+    // prereq/description from the appended "## English" section. A plain
+    // English-only note (no "(...)" suffix, no "## English" section) just
+    // uses its own basename and the fields parsed above directly - nothing
+    // extra to extract since the note IS already in English.
     const nameEnMatch = /\(([^()]+)\)\s*$/.exec(f.basename);
     const nameEn = nameEnMatch ? nameEnMatch[1].trim() : f.basename;
     let prereqEn = prereqLine ? prereqLine[1].trim() : "";
@@ -9955,7 +9932,7 @@ async function getAllFeatNotes(app) {
       name: f.basename,
       category,
       prereq: prereqLine ? prereqLine[1].trim() : "",
-      repeatable: repeatLine ? /Ano/i.test(repeatLine[1]) : false,
+      repeatable: repeatLine ? /Ano|Yes/i.test(repeatLine[1]) : false,
       asiText: asiLine ? asiLine[1].trim() : "",
       description: body,
       nameEn,
