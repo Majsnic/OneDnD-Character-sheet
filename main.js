@@ -654,8 +654,9 @@ const DEFAULT_SETTINGS = {
   // exact same plain numbers this sheet always showed before that
   // integration existed - for anyone who has Dice Roller installed for
   // other notes but doesn't want every stat on this sheet turned into a
-  // button.
-  diceRollerEnabled: true,
+  // button. Defaults to off: this is an opt-in convenience, not something
+  // every Dice Roller user necessarily wants switched on for them.
+  diceRollerEnabled: false,
   // Whether the Homebrew Content section (Classes/Subclasses/Races/
   // Ancestries/Backgrounds/Features/Items/Feats creation wizards) shows up
   // in this Settings tab when Obsidian is running on a mobile phone (see
@@ -5598,7 +5599,7 @@ party_overrides: []
   }
 
   getPlugin() {
-    return this.app.plugins.plugins["dnd-2024-character-sheet"];
+    return this.app.plugins.plugins["onednd-character-sheet"];
   }
 
   async render(overrideFm) {
@@ -5957,11 +5958,13 @@ function isDiceRollerActive(app) {
   if (!pluginEnabled) return false;
   // Also gated by this plugin's own "Dice Roller integration" setting (see
   // Dnd2024SettingTab) - lets someone with Dice Roller installed for other
-  // notes opt this sheet back out to plain numbers without disabling Dice
-  // Roller vault-wide. Defaults to on (matches DEFAULT_SETTINGS) if the
-  // plugin instance/settings can't be found for some reason.
-  const dndPlugin = app.plugins.plugins && app.plugins.plugins["dnd-2024-character-sheet"];
-  return !dndPlugin || !dndPlugin.settings || dndPlugin.settings.diceRollerEnabled !== false;
+  // notes opt this sheet into clickable roll buttons without turning every
+  // other note's dice notation into buttons too. Defaults to off (matches
+  // DEFAULT_SETTINGS), and fails closed - if the plugin instance/settings
+  // can't be found for some reason, this returns false rather than
+  // silently re-enabling the feature against whatever the user chose.
+  const dndPlugin = app.plugins.plugins && app.plugins.plugins["onednd-character-sheet"];
+  return !!dndPlugin && !!dndPlugin.settings && dndPlugin.settings.diceRollerEnabled === true;
 }
 
 // True only for a bare signed/unsigned integer like "+5", "-1", "5" - an
@@ -9082,7 +9085,7 @@ class SpellsTracker extends MarkdownRenderChild {
     const otherCasters = classProgressions.filter((c) => c.type !== "pact");
 
     const edition = String(abilitiesFm.rules_edition || "2024").trim();
-    const dndPlugin = this.app.plugins.plugins["dnd-2024-character-sheet"];
+    const dndPlugin = this.app.plugins.plugins["onednd-character-sheet"];
     const spellSlotTables = dndPlugin ? dndPlugin.SPELL_SLOT_TABLES : null;
     if (!spellSlotTables && classProgressions.length > 0) {
       el.createEl("div", {
@@ -17464,7 +17467,7 @@ class Dnd2024SettingTab extends PluginSettingTab {
         // an in-progress, not-yet-finished path shouldn't trigger that on
         // every character typed.
         text
-          .setPlaceholder(`${this.plugin.manifest.dir || ".obsidian/plugins/dnd-2024-character-sheet"}/Homebrew Data`)
+          .setPlaceholder(`${this.plugin.manifest.dir || ".obsidian/plugins/onednd-character-sheet"}/Homebrew Data`)
           .setValue(this.plugin.settings.homebrewDataFolder);
         text.inputEl.addEventListener("blur", async () => {
           const value = text.getValue().replace(/\/+$/, "").trim();
