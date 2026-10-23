@@ -18,10 +18,18 @@ Built to replace Dataview-based character sheets: instead of `dataviewjs` blocks
 
 ## Installation
 
-1. Download `main.js`, `manifest.json`, and `styles.css` from a release (or this repo).
-2. Create a folder named `dnd-2024-character-sheet` inside your vault's `.obsidian/plugins/` directory.
+### From Community Plugins (recommended)
+
+1. In Obsidian, go to Settings → Community plugins → Browse.
+2. Search for "One DnD Character Sheet".
+3. Click Install, then Enable.
+
+### Manual installation
+
+1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/Majsnic/DnD-2024-Character-sheet-plugin/releases/latest) (or this repo).
+2. Create a folder named `onednd-character-sheet` inside your vault's `.obsidian/plugins/` directory.
 3. Copy the three files into that folder.
-4. Reload Obsidian (or restart it), then enable "D&D 2024 Character Sheet" under Settings → Community plugins.
+4. Reload Obsidian (or restart it), then enable "One DnD Character Sheet" under Settings → Community plugins.
 
 ## Example vault
 
