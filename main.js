@@ -4003,6 +4003,33 @@ function findPartyForCharacter(itData, mainFile) {
   return party ? party.name : null;
 }
 
+// Fallback for findPartyForCharacter, consulted only when that lookup came
+// up empty (no Initiative Tracker data, or this character isn't in any of
+// ITS parties) - resolves a character's party from this plugin's OWN
+// Settings > Party Groups instead (see Dnd2024SettingTab's "Party Groups"
+// section and CharacterTracker/resolveCharacterTrackerRoster above, which
+// already use this exact same settings data for the GM roster block). This
+// is what lets "Party Inventory" work for a DM who sets up a named group
+// in Settings and adds this character to it, without needing the
+// Initiative Tracker community plugin installed at all - Initiative
+// Tracker's own live party/encounter data stays authoritative whenever
+// that plugin IS in use (callers try findPartyForCharacter first), this
+// only fills the gap for everyone else. Members are stored as `[[Basename]]`
+// wikilinks, same format/resolution as the Character Tracker roster.
+function findSettingsPartyForCharacter(app, mainFile) {
+  const plugin = app.plugins.plugins && app.plugins.plugins["onednd-character-sheet"];
+  const groups = (plugin && plugin.settings && plugin.settings.partyGroups) || [];
+  for (const group of groups) {
+    for (const link of group.members || []) {
+      const match = String(link || "").match(/^\[\[(.+?)\]\]$/);
+      const basename = match ? match[1] : link;
+      const target = app.metadataCache.getFirstLinkpathDest(basename, mainFile.path);
+      if (target && target.path === mainFile.path) return group.name || null;
+    }
+  }
+  return null;
+}
+
 // Pure decision logic behind HpTracker.pullInitiativeTrackerCombatHp above
 // (see there for the full rationale). Free of Obsidian API calls so it's
 // directly unit-testable - see test/run_test_it_hp_pull.js. Reads
@@ -5851,8 +5878,49 @@ async function resolvePortraitFile(app, selectedFile, referenceFilePath) {
 
   const arrayBuffer = await selectedFile.arrayBuffer();
   const targetPath = await app.fileManager.getAvailablePathForAttachment(selectedFile.name, referenceFilePath);
+
+  // getAvailablePathForAttachment always hands back a non-colliding name
+  // (e.g. "Portrait 1.png") whenever something already sits at the plain
+  // "Portrait.png" in that same folder - it never checks whether that
+  // existing file is actually the SAME image. Re-picking a portrait that
+  // was never a vault-resident file to begin with (the common case: an
+  // external image from Downloads, picked again because the sheet's
+  // portrait appears to have gone missing for some other reason) used to
+  // always leave a brand new numbered duplicate behind even when the
+  // original copy was sitting right there unharmed. This checks the one
+  // plain candidate path Obsidian would have used had there been no
+  // collision, and reuses it instead of copying again whenever its bytes
+  // genuinely match - a quick size check first, then a full byte compare,
+  // both cheap for a one-off user click. Only ever widens what counts as
+  // "already in the vault" (resolvePortraitFile's whole point above) -
+  // never blocks or changes behavior for a genuinely new image.
+  try {
+    const slash = targetPath.lastIndexOf("/");
+    const folder = slash === -1 ? "" : targetPath.slice(0, slash);
+    const candidatePath = folder ? `${folder}/${selectedFile.name}` : selectedFile.name;
+    const candidate = app.vault.getAbstractFileByPath(candidatePath);
+    if (candidate && candidate.stat && candidate.stat.size === arrayBuffer.byteLength) {
+      const existingBuffer = await app.vault.adapter.readBinary(candidate.path);
+      if (arrayBuffersEqual(existingBuffer, arrayBuffer)) {
+        return { path: candidate.path, copied: false };
+      }
+    }
+  } catch (e) {
+    // Best-effort dedup check only - never blocks the actual portrait pick.
+  }
+
   const newImageFile = await app.vault.createBinary(targetPath, arrayBuffer);
   return { path: newImageFile.path, copied: true };
+}
+
+function arrayBuffersEqual(a, b) {
+  if (!a || !b || a.byteLength !== b.byteLength) return false;
+  const viewA = new Uint8Array(a);
+  const viewB = new Uint8Array(b);
+  for (let i = 0; i < viewA.length; i++) {
+    if (viewA[i] !== viewB[i]) return false;
+  }
+  return true;
 }
 
 function proficiencyBonusForLevel(level) {
@@ -6847,15 +6915,19 @@ class InventoryTracker extends MarkdownRenderChild {
       charFm = (cache && cache.frontmatter) || {};
     }
 
-    // ---- Find this character's party (if any) via the Initiative Tracker
-    // community plugin's own data - see findPartyForCharacter above. A
-    // character with no party (never added to one, or removed from one
+    // ---- Find this character's party (if any), via the Initiative Tracker
+    // community plugin's own data first (see findPartyForCharacter above),
+    // falling back to this plugin's own Settings > Party Groups
+    // (findSettingsPartyForCharacter) whenever that comes up empty - so
+    // Party Inventory also works for a DM who isn't using Initiative
+    // Tracker at all, just a named group set up in Settings. A character
+    // with no party either way (never added to one, or removed from one
     // since last render) simply doesn't get a "Party Inventory" tab at
     // all, and if the tab that just disappeared was the one showing, this
     // falls back to "My Inventory" automatically rather than rendering a
     // blank/broken party view. ----
     const itData = await getInitiativeTrackerData(this.app);
-    const partyName = findPartyForCharacter(itData, this.mainFile);
+    const partyName = findPartyForCharacter(itData, this.mainFile) || findSettingsPartyForCharacter(this.app, this.mainFile);
     if (this.viewMode === "party" && !partyName) this.viewMode = "mine";
 
     // ---- Party file/frontmatter, fetched once whenever a party exists,
@@ -17314,6 +17386,15 @@ class Dnd2024SettingTab extends PluginSettingTab {
     // settings headings).
     containerEl.addClass("dnd2024-settings-tab");
     containerEl.createEl("h2", { text: "D&D 2024 Character Sheet" });
+
+    new Setting(containerEl)
+      .setName("Found a bug?")
+      .setDesc("Report it on GitHub - please include your Obsidian/plugin version and what you were doing when it happened.")
+      .addButton((btn) => {
+        btn.setButtonText("Report a Bug").onClick(() => {
+          window.open("https://github.com/Majsnic/DnD-2024-Character-sheet-plugin/issues/new");
+        });
+      });
 
     new Setting(containerEl)
       .setName("New character folder")

@@ -56,6 +56,10 @@ If you want the fuller character creator with more species/classes/subclasses, y
 
 The item library also intentionally contains **only** base equipment and generically-named magic item templates — no uniquely-named magic items (Bag of Holding, Ioun Stones, artifacts, etc.). The spell and monster libraries, by contrast, reproduce the SRD's actual spell/stat-block text in full, since the SRD's Creative Commons license explicitly permits that.
 
+## Reporting bugs
+
+Found something broken? Please [open an issue on GitHub](https://github.com/Majsnic/DnD-2024-Character-sheet-plugin/issues/new) — include your Obsidian version, this plugin's version (Settings → Community plugins → installed plugins list), and what you were doing right before it happened. You can also jump straight there from inside Obsidian: Settings → D&D 2024 Character Sheet → "Report a Bug".
+
 ## SRD Attribution
 
 This work includes material from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of the Coast LLC, available at https://www.dndbeyond.com/srd. The SRD 5.2.1 is licensed under the Creative Commons Attribution 4.0 International License, available at https://creativecommons.org/licenses/by/4.0/legalcode.
