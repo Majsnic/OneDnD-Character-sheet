@@ -8,6 +8,7 @@ Built to replace Dataview-based character sheets: instead of `dataviewjs` blocks
 
 - Full character sheet with dedicated, always-live tabs: Overview, Abilities, Saving Throws, Skills, Senses, Proficiency Bonus, Defenses, HP, Conditions, Speed, Actions, Spells, Inventory, Features, and Notes.
 - Create Character wizard: card-based Species/Class selection, 2024 backgrounds, ability score methods, languages, and class/species info panels — modeled on D&D Beyond's own creation flow.
+- **New in 1.5.0 — "For Beginners" quick-start:** a one-click alternative to the full wizard, built for brand-new players or anyone who just wants to get into a game fast. See below.
 - Inventory tab with Equipment/Backpack/Party Inventory sections, weight and currency tracking, and a real 3-slot Attunement mechanic.
 - Item notes can be linked straight into a character's inventory ("Link Item"); when equipped, the plugin automatically computes attack bonus, damage, and AC from the note's frontmatter — see [`docs/item-schema.md`](docs/item-schema.md).
 - Actions tab that automatically lists weapon attacks and damage-dealing cantrips/spells alongside manually-added actions.
@@ -15,6 +16,28 @@ Built to replace Dataview-based character sheets: instead of `dataviewjs` blocks
 - D&D Beyond character importer (Settings tab).
 - PDF export, built around the official 2014-style character sheet PDF layout.
 - Level-up flow wired to Ability Score Improvement / Feat choices.
+
+### For Beginners quick-start
+
+On the Create Character screen, click **For Beginners** instead of working through the full wizard page by page. You'll get a short, plain-language series of questions instead:
+
+- Your character's name, and a portrait if you have one (optional — add it later if not)
+- Starting level — most new campaigns start at 1, but you can start higher (3, 5, 8, 11, 15, or 20) if your table calls for it
+- Your relationship with magic (none, a little, or mostly magic)
+- What you want to do in a fight, which narrows down to a fitting class
+- Who you are in the story (background)
+- Who you want to be (species)
+
+Answer those and the wizard fills in everything else for you, choosing options that actually fit the character you described rather than just whatever came first on a list:
+
+- Ability scores (Standard Array, assigned to the abilities your class actually needs)
+- Starting gear for your class, plus a general adventuring pack
+- Skill proficiencies — both your background's fixed skills and your class's own "choose some" allowance
+- Every choice-driven feature you have at your starting level (Fighting Style, Expertise, Pact Boon, Weapon Mastery pre-set to your actual starting weapons, and so on), so the Features tab never shows an empty pick
+- Spell selections, if your class casts — cantrips and leveled spells, spread across every spell level you've actually unlocked, not just piled onto the lowest one
+- Ability Score Improvements for anyone starting above level 1
+
+Nothing here is final — every page is still fully editable before you click Create, so this is a starting point, not a lock-in. This flow only ever appears on Create Character; it has no effect on Update Character Sheet or the Level Up modal, and — matching the rest of this public release — it only ever offers the SRD-scoped classes, species, and backgrounds described under **A note on scope** below.
 
 ## Installation
 
