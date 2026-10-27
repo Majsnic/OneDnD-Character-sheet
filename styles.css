@@ -2626,6 +2626,57 @@
   border-top: 1px solid var(--dnd-border, #2a2e3a);
 }
 
+/* ===== "For Beginners" quick-start (Create Character wizard's Home page
+   only - see openNewCharacterModal's own comment on this feature for the
+   full rationale; openCharSheetModal/Level Up never builds any of this) ===== */
+.wizard-beginner-intro {
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--dnd-border, #2a2e3a);
+}
+/* Twice the size of the plain .stat-subheader this used to be (0.72em),
+   and colored/weighted to match .wizard-info-panel .stat-subheader's own
+   "All WotC Content"/"SRD Only" accent treatment just to its right, so
+   this reads as the prominent call-to-action it's meant to be rather than
+   a small section label. */
+.wizard-beginner-heading {
+  font-size: 1.5em;
+  font-weight: 700;
+  color: var(--dnd-accent, #c05a4a);
+  text-transform: none;
+  letter-spacing: normal;
+  margin: 0 0 6px 0;
+}
+.wizard-beginner-intro .condition-desc {
+  margin-bottom: 10px;
+}
+.wizard-beginner-btn {
+  font-weight: 600;
+}
+/* Name/Portrait step (always STEPS[0] of the popup - see openBeginnerWizard) */
+.wizard-beginner-portrait-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 16px 0;
+}
+.wizard-beginner-next {
+  margin-top: 4px;
+}
+/* Overrides .wizard-card's default name+chevron single-line layout with a
+   stacked name-then-blurb layout, since each beginner question's choices
+   need a one-line description visible, not just a name. */
+.wizard-beginner-card {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.wizard-beginner-card-blurb {
+  font-size: 0.85em;
+  color: var(--dnd-dim, #8b8f9c);
+  line-height: 1.4;
+}
+
 /* ===== Homebrew Content wizards (Settings > D&D 2024 Character Sheet >
    Homebrew Content's Add/Edit Class/Subclass/Race/Feature popups) ===== */
 .action-modal-homebrew .setting-item-description {
