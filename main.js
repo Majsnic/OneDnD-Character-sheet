@@ -14642,11 +14642,50 @@ class OverviewTracker extends MarkdownRenderChild {
     super(containerEl);
     this.app = app;
     this.mainFile = mainFile;
+    // See the metadataCache "changed" listener registered in onload()
+    // below - set right before this tracker's own syncInitiativeTrackerFrontmatter
+    // write so that write's own "changed" event doesn't immediately
+    // re-trigger a second (redundant, if harmless - see the early-equality
+    // guard inside syncInitiativeTrackerFrontmatter) pass.
+    this._ownWriteCooldownUntil = 0;
   }
 
   async onload() {
     this.subFile = await ensureAbilitiesSubFile(this.app, this.mainFile);
     await this.render();
+
+    // Previously this tracker only ever synced the ac/hp/current-hp/modifier
+    // mirror fields once, on the note's initial open - Damage/Heal/Rest/
+    // Update Character Sheet/Level Up and everything else that changes the
+    // main file's HP or AC afterward left those mirror fields stale until
+    // the note was closed and reopened, which is also the only thing that
+    // made Initiative Tracker (Plus)'s own live "Link to Note" auto-push
+    // notice anything changed - that fork listens for metadataCache
+    // "changed" on any of its linked player notes and immediately pushes
+    // set_max_hp/set_hp/ac into a running encounter with no reload needed,
+    // but only reacts to an event actually firing, and nothing fired one
+    // here between note-opens. This listener is what now fires one on
+    // every relevant change, keeping those mirror fields (and so
+    // Initiative Tracker's live encounter view) current without the user
+    // needing to reopen this note at all. Only the background sync runs
+    // here, not a full this.render() - none of Overview's own visible
+    // content (portrait/race/class/subclass/level/background/alignment/
+    // player/buttons) changes from an HP or AC write, so re-rendering the
+    // whole block on every combat hit would just be wasted work/flicker.
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (changedFile) => {
+        if (Date.now() < this._ownWriteCooldownUntil) return;
+        if (changedFile.path === this.mainFile.path) this.syncInitiativeTrackerFrontmatterFromCache();
+      })
+    );
+  }
+
+  async syncInitiativeTrackerFrontmatterFromCache() {
+    const mainCache = this.app.metadataCache.getFileCache(this.mainFile);
+    const fm = (mainCache && mainCache.frontmatter) || {};
+    const abCache = this.app.metadataCache.getFileCache(this.subFile);
+    const abFm = (abCache && abCache.frontmatter) || {};
+    await this.syncInitiativeTrackerFrontmatter(fm, abFm);
   }
 
   async render(overrideFm) {
@@ -14766,6 +14805,7 @@ class OverviewTracker extends MarkdownRenderChild {
     }
 
     try {
+      this._ownWriteCooldownUntil = Date.now() + 600;
       await this.app.fileManager.processFrontMatter(file, (writeFm) => {
         writeFm.ac = ac;
         writeFm.hp = hpMax;
