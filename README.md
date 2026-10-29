@@ -61,6 +61,9 @@ The `example-vault/` folder contains a ready-to-use content library that follows
 - **`Items/`** — all 36 SRD weapons, all 13 SRD armors + shield, 78 pieces of adventuring gear (`Common/`), a handful of standalone gear notes (potions, kits, spell scroll), and generic `+1`/`+2`/`+3` magic weapon, armor, shield, and ammunition templates (`Uncommon/`, `Rare/`, `Very Rare/`).
 - **`Spells/`** — all 339 SRD 5.2.1 spells (27 cantrips through 9th level), one note per spell, organized into level folders, formatted for this plugin's Spells tab.
 - **`Monsters/`** — all 330 SRD 5.2.1 monster stat blocks (Aboleth through Zombie, animals included), one note per monster, formatted for the [Fantasy Statblocks](https://github.com/javalent/fantasy-statblocks) plugin convention this vault's Monster tooling expects.
+- **`Feats/`** — all 17 SRD 5.2.1 feats, one note per feat, each tagged `#Feat` so it's picked up automatically by the Create Character wizard, the For Beginners quick-start, and the Level Up modal's feat choices.
+- **`Conditions/`** — all 15 SRD 5.2.1 conditions, one note per condition, each tagged `#Condition` so the Conditions tab can link out to the full rules text.
+- **`Senses/`** — the 5 SRD 5.2.1 special senses (Blindsight, Darkvision, Telepathy, Tremorsense, Truesight), each tagged `#Sense` for the Senses tab.
 
 Copy the contents of `example-vault/` into your own vault to get a working, linkable content library out of the box. Download it directly from [`example-vault.zip`](https://github.com/Majsnic/DnD-2024-Character-sheet-plugin/raw/refs/heads/main/example-vault.zip) in this repository, unzip it, and copy its contents into your vault — no need to clone the whole repo just for this.
 
