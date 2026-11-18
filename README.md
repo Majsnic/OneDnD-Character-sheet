@@ -123,6 +123,20 @@ If the [Atlas VTT](https://community.obsidian.md/plugins/atlas-vtt) plugin is in
 
 The compact template is based on the 5E (2024) character template from [DnD Beyond Importer for Atlas](https://community.obsidian.md/plugins/dndbeyond-importer-for-atlas) by young-george (MIT).
 
+## Compact character card
+
+The same compact layout your characters get as Atlas tokens, drawn by this plugin itself, so it works **without Atlas** (and on mobile). Put this code block in any note:
+
+````
+```onednd-compact
+[[Character Name]]
+```
+````
+
+Inside a character's own note you can leave the block empty. The card shows the header line, AC / Initiative / Speed / HP, the ability scores with saves, and the Actions, Spells, Skills, Features, Inventory, Defenses and Background tabs. Spell slots, limited uses, death saves and Heroic Inspiration are clickable checkboxes that update the character sheet. The card refreshes by itself when the sheet changes.
+
+[Roll for Initiative](https://github.com/Majsnic/Roll-for-Initiative) shows this card in its statblock pane when you click a player character (with Atlas VTT installed, it shows the Atlas card instead).
+
 ## Cleaning up unused character data
 
 Run the command "Clean up unused character sheet data", or use Settings → Character data folder → "Unused character data → Check". It lists data folders that no note uses any more, plus loose files from the old pre-folder layout. If you confirm, it moves them to `<data folder>/_Deleted/` and deletes nothing. Deleting a character sheet now also removes its data folder more reliably.

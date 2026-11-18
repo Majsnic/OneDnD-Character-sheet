@@ -2842,6 +2842,85 @@
 }
 
 /* ============================================================
+   Narrow note pane on desktop (GitHub issue #3, v1.9.1)
+   At 125% OS display scaling with a sidebar open, the window is still
+   wider than the 700px phone breakpoint, but the note pane itself is
+   narrow - so the desktop layout got squeezed: skill names broke
+   letter by letter ("Acrobat ics"), saving-throw labels were clipped
+   ("IN", "W", "CH"), and button rows ran past the card edge. The fixes
+   below keep labels on one line and let columns/buttons wrap to the
+   next line instead of shrinking past their content.
+   ============================================================ */
+.dnd-sheet .callout[data-callout="saves"] .stat-ability,
+.dnd-sheet .callout[data-callout="skills"] .stat-name,
+.dnd-sheet .callout[data-callout="skills"] .stat-ability {
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+/* Saves' ability label: grow to fit instead of a fixed 40px box. */
+.dnd-sheet .callout[data-callout="saves"] .stat-ability {
+  width: auto;
+  min-width: 40px;
+}
+.dnd-sheet .callout[data-callout="saves"] .saves-columns {
+  grid-template-columns: repeat(2, minmax(max-content, 1fr));
+}
+/* Saves/Senses column and Skills column never shrink below their
+   content - the row's existing flex-wrap moves the Character Details
+   panel underneath instead. */
+.dnd-sheet.dnd-sheet .callout[data-callout="row"] > .callout-content > .callout[data-callout="skills"],
+.dnd-sheet.dnd-sheet .callout[data-callout="row"] > .callout-content > .callout[data-callout="saves"],
+.dnd-sheet.dnd-sheet .callout[data-callout="row"] > .callout-content > .callout[data-callout="colstack"] {
+  min-width: min-content;
+}
+/* HP card (Set Temp HP, Long/Short Rest) and the Overview buttons: wrap
+   onto a second line rather than overflowing the card. */
+.dnd-sheet .hp-extra-row {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.dnd-sheet .hp-extra-row .narrow-input {
+  min-width: 3em;
+}
+/* Overview card: the 250px portrait used to keep its full width while
+   the text column next to it shrank to almost nothing, pushing the
+   Export PDF / Update Character Sheet / Level Up buttons under the
+   portrait (only the "F" of Export PDF stayed visible). Desktop-width
+   only - the phone section below stacks this card its own way. */
+@media (min-width: 701px) {
+  .dnd-sheet .overview-flex-row {
+    flex-wrap: wrap;
+  }
+  .dnd-sheet .overview-left-col {
+    flex: 1 1 180px;
+    min-width: 180px;
+  }
+  .dnd-sheet .overview-right-col {
+    flex: 1 1 120px;
+    min-width: 120px;
+    max-width: 250px;
+  }
+  .dnd-sheet .overview-btn-row .action-btn-update {
+    max-width: 100%;
+    white-space: normal;
+  }
+}
+/* Character Details tab buttons (Meta Bind button group): wrap instead
+   of crowding into one line. */
+.dnd-sheet .callout[data-callout="details"] > .callout-content p.dnd-sheet-tag-has-button,
+.dnd-sheet .callout[data-callout="details"] .mb-button-group {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+.dnd-sheet .callout[data-callout="details"] > .callout-content p.dnd-sheet-tag-has-button button,
+.dnd-sheet .callout[data-callout="details"] .mb-button-group button {
+  white-space: nowrap;
+}
+
+/* ============================================================
    Phone adaptation (2026-09-20)
    Everything above this point was designed for a desktop-width
    Obsidian window and never adjusted for a phone screen - there was no
@@ -3776,4 +3855,352 @@
 }
 .atlas-sb-sheet.atlas-statblock[data-template^="one-dnd-character"] .atlas-sb-counter__pip-button:hover .atlas-sb-counter__pip {
   border-color: var(--text-normal);
+}
+
+/* ===== Compact character card (`onednd-compact` block, v1.10.0) =====
+   The compact Atlas VTT character look (CompactCharacterCard in main.js),
+   drawn by this plugin so it works without Atlas. Theme colours only, so
+   it follows light/dark mode. Tabs = the same round pills, counters = the
+   same checkboxes as our Atlas template styling above. */
+.onednd-cc {
+  --cc-accent: var(--text-accent);
+  --cc-line: color-mix(in oklch, var(--text-accent) 25%, transparent);
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  line-height: 1.4;
+}
+.onednd-cc-empty,
+.onednd-cc-muted {
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 4px 0;
+}
+.onednd-cc-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.onednd-cc-portrait {
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--cc-accent);
+}
+.onednd-cc-titles {
+  min-width: 0;
+}
+.onednd-cc .onednd-cc-name {
+  display: block;
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-large);
+  font-weight: var(--font-bold);
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.02em;
+  color: var(--text-normal);
+  text-decoration: none;
+}
+.onednd-cc .onednd-cc-name:hover {
+  color: var(--cc-accent);
+}
+.onednd-cc-line {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.onednd-cc-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(62px, 1fr));
+  gap: 6px;
+  margin: 6px 0 10px;
+}
+.onednd-cc-metric {
+  border: 1px solid var(--cc-line);
+  border-radius: 8px;
+  padding: 4px 2px;
+  text-align: center;
+  background: color-mix(in oklch, var(--cc-accent) 5%, transparent);
+}
+.onednd-cc-metric-value {
+  font-size: 1.25em;
+  font-weight: var(--font-bold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.onednd-cc-metric-label {
+  font-size: 0.78em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.onednd-cc-metric.is-hp .onednd-cc-metric-value {
+  color: var(--cc-accent);
+}
+.onednd-cc-metrics.is-small {
+  margin: 4px 0 8px;
+}
+.onednd-cc-metrics.is-small .onednd-cc-metric-value {
+  font-size: 1.05em;
+}
+.onednd-cc-scores {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.onednd-cc-score {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--cc-line);
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.onednd-cc-score-key {
+  font-weight: var(--font-bold);
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+.onednd-cc-score-num {
+  text-align: right;
+  font-weight: var(--font-bold);
+}
+.onednd-cc-score-mods {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  white-space: nowrap;
+}
+.onednd-cc-score-mod {
+  font-weight: var(--font-bold);
+}
+.onednd-cc-score-save {
+  color: var(--text-muted);
+}
+.onednd-cc-score-save::before {
+  content: "Save ";
+  font-size: 0.85em;
+}
+.onednd-cc-score-save.is-prof {
+  color: var(--cc-accent);
+  font-weight: var(--font-bold);
+}
+.onednd-cc-tabstrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--cc-line);
+}
+.onednd-cc-tabstrip.is-sub {
+  border-bottom: none;
+  margin-bottom: 4px;
+}
+.onednd-cc .onednd-cc-tab {
+  margin: 0;
+  padding: 3px 10px;
+  height: auto;
+  border: 1px solid color-mix(in oklch, var(--cc-accent) 45%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  font-weight: var(--font-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.3;
+  cursor: pointer;
+}
+.onednd-cc .onednd-cc-tab:hover {
+  border-color: var(--cc-accent);
+  background: color-mix(in oklch, var(--cc-accent) 10%, transparent);
+  color: var(--text-normal);
+}
+.onednd-cc .onednd-cc-tab[aria-selected="true"] {
+  border-color: var(--cc-accent);
+  background: color-mix(in oklch, var(--cc-accent) 24%, transparent);
+  color: var(--text-normal);
+}
+.onednd-cc-section {
+  margin-bottom: 10px;
+}
+.onednd-cc-section.has-divider {
+  padding-top: 8px;
+  border-top: 1px solid var(--cc-line);
+}
+.onednd-cc-heading {
+  font-family: var(--font-interface);
+  font-weight: var(--font-bold);
+  font-size: 1.05em;
+  color: var(--cc-accent);
+  border-bottom: 1px solid var(--cc-line);
+  margin-bottom: 4px;
+  padding-bottom: 2px;
+}
+.onednd-cc-subheading {
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 6px 0 2px;
+}
+.onednd-cc-entry {
+  padding: 3px 0;
+}
+.onednd-cc-entry + .onednd-cc-entry {
+  border-top: 1px dashed color-mix(in oklch, var(--cc-accent) 12%, transparent);
+}
+.onednd-cc-entry-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+}
+.onednd-cc-entry.has-desc > .onednd-cc-entry-top {
+  cursor: pointer;
+}
+.onednd-cc-entry.has-desc > .onednd-cc-entry-top::before {
+  content: "▸";
+  color: var(--text-faint);
+  font-size: 0.8em;
+}
+.onednd-cc-entry.has-desc.is-open > .onednd-cc-entry-top::before {
+  content: "▾";
+}
+.onednd-cc-entry-name {
+  font-weight: var(--font-bold);
+  font-style: italic;
+}
+.onednd-cc-entry-extras {
+  color: var(--text-muted);
+  font-size: 0.92em;
+}
+.onednd-cc-entry-desc {
+  color: var(--text-normal);
+  padding-left: 12px;
+}
+.onednd-cc-entry-desc p {
+  margin: 2px 0 4px;
+}
+.onednd-cc-runin {
+  margin: 2px 0;
+}
+.onednd-cc-runin-label {
+  font-weight: var(--font-bold);
+  font-style: italic;
+}
+.onednd-cc-skill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 0;
+}
+.onednd-cc-skill-dot {
+  width: 1em;
+  color: var(--text-faint);
+  text-align: center;
+}
+.onednd-cc-skill-dot.is-prof {
+  color: var(--cc-accent);
+}
+.onednd-cc-skill-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.onednd-cc-skill-mod {
+  font-weight: var(--font-bold);
+  font-variant-numeric: tabular-nums;
+}
+.onednd-cc-counters {
+  margin: 4px 0 6px;
+}
+.onednd-cc-counter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+}
+.onednd-cc-counter-name {
+  min-width: 0;
+}
+.onednd-cc-boxes {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+.onednd-cc .onednd-cc-box {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 1.5px solid color-mix(in oklch, var(--cc-accent) 70%, var(--text-muted));
+  border-radius: 3px;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+}
+.onednd-cc .onednd-cc-box:hover {
+  border-color: var(--text-normal);
+}
+.onednd-cc .onednd-cc-box.is-used {
+  border-color: var(--cc-accent);
+  background: var(--cc-accent);
+}
+.onednd-cc .onednd-cc-box.is-used::after {
+  content: "";
+  position: absolute;
+  left: 3.5px;
+  top: 0.5px;
+  width: 3px;
+  height: 7px;
+  border: solid var(--text-on-accent, #fff);
+  border-width: 0 1.5px 1.5px 0;
+  rotate: 45deg;
+}
+.onednd-cc .onednd-cc-step {
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--cc-line);
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+}
+.onednd-cc-step-value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.onednd-cc-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 16px;
+}
+.onednd-cc-row > .onednd-cc-counters {
+  flex: 1 1 140px;
+}
+.onednd-cc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 2px 10px;
+  margin: 4px 0;
+}
+.onednd-cc-notes {
+  margin-top: 4px;
+  white-space: pre-wrap;
 }

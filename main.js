@@ -2768,6 +2768,49 @@ function featureActionSourceId(rawName) {
 // feature-write site (Level Up, Create Character, Update Character Sheet)
 // calls once its Features companion write is done, passing every
 // newly-confirmed feature as { name, chosen }.
+// Wood Elf (Elven Lineage) raises the Elf's 30 ft. Walking speed to 35 ft.
+// Driven by the Elven Lineage feature's resolved choice ({ name, chosen }),
+// so it works the same from Create Character, Update Character Sheet and
+// Level Up. Idempotent via `wood_elf_speed_applied` on the Abilities
+// companion. For a character whose speed already includes the bonus
+// (Create Character's own preview adds it, or the player fixed it by hand
+// before this existed) only the marker is set - the +5 is added only when
+// the current speed still equals the plain base (30, or 40 with Roving).
+// Switching the lineage away from Wood Elf later takes the 5 ft. back off.
+async function applyWoodElfSpeed(app, mainFile, features) {
+  const lineage = (features || []).find((f) => String((f && f.name) || "").trim().toLowerCase() === "elven lineage");
+  if (!lineage) return;
+  const chosen = (lineage.chosen || []).map((c) => String(c || "").trim().toLowerCase());
+  if (!chosen.length) return;
+  const isWood = chosen.includes("wood elf");
+  try {
+    const abFile = await ensureAbilitiesSubFile(app, mainFile);
+    const cache = app.metadataCache.getFileCache(abFile);
+    const cfm = (cache && cache.frontmatter) || {};
+    if (isWood && cfm.wood_elf_speed_applied) return;
+    if (!isWood && !cfm.wood_elf_speed_applied) return;
+    // SpeedTracker listens to metadataCache itself, so no manual refresh.
+    await app.fileManager.processFrontMatter(abFile, (fm) => {
+      const baseStr = String(fm.base_speed || "30 ft.");
+      const match = baseStr.match(/(\d+)/);
+      const cur = match ? Number(match[1]) : 30;
+      const setSpeed = (n) => { fm.base_speed = match ? baseStr.replace(/\d+/, String(n)) : `${n} ft.`; };
+      if (isWood) {
+        if (fm.wood_elf_speed_applied) return;
+        const plainBase = 30 + (fm.roving_speed_applied ? 10 : 0);
+        if (cur === plainBase) setSpeed(cur + 5);
+        fm.wood_elf_speed_applied = true;
+      } else {
+        if (!fm.wood_elf_speed_applied) return;
+        setSpeed(Math.max(0, cur - 5));
+        delete fm.wood_elf_speed_applied;
+      }
+    });
+  } catch (e) {
+    // Non-fatal - same best-effort reasoning as Roving below.
+  }
+}
+
 async function applyKnownFeatureSideEffects(app, mainFile, featureNames) {
   const hasRoving = (featureNames || []).some((n) => String(n || "").trim().toLowerCase() === "roving");
   if (!hasRoving) return;
@@ -3097,6 +3140,7 @@ async function applyActionGrantSideEffect(app, mainFile, def, featName, level) {
 // the character's PREVIOUS level right after a level-up.
 async function applyFeatureSideEffects(app, mainFile, features, levelOverride) {
   const list = features || [];
+  await applyWoodElfSpeed(app, mainFile, list);
   await applyKnownFeatureSideEffects(app, mainFile, list.map((f) => f.name));
   let currentLevel = levelOverride;
   if (currentLevel == null) {
@@ -12593,7 +12637,15 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
   // assignment is always in place before a user can actually trigger it.
   let bonusRefs = null;
   const getBgBonusFor = (key) => (bonusRefs ? bonusRefs.getBonus(key) : 0);
-  let methodSelect, applyStandardArray, recalcPointBuy;
+  let methodSelect, applyStandardArray, recalcPointBuy, applyManualBonus;
+  // Re-applies the background Ability Bonus through whichever score
+  // method is active (Manual included - see applyManualBonus).
+  const reapplyBgBonus = () => {
+    if (!methodSelect) return;
+    if (methodSelect.value.startsWith("Standard Array")) applyStandardArray();
+    else if (methodSelect.value.startsWith("Point Buy")) recalcPointBuy();
+    else if (applyManualBonus) applyManualBonus();
+  };
   if (isCreate) {
     leftCol.createEl("div", { cls: "stat-subheader", text: "Ability Score Method" });
     const methodRow = leftCol.createEl("div", { cls: "action-modal-row" });
@@ -12667,17 +12719,39 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
     };
     pbSelects.forEach((r) => r.sel.addEventListener("change", recalcPointBuy));
 
+    // Manual mode + background Ability Bonus (GitHub issue #2): the bonus
+    // used to be skipped entirely in Manual mode (the default), so a
+    // background's +2/+1 never reached the sheet unless Standard Array or
+    // Point Buy was picked. It's now applied as a delta on top of whatever
+    // score is in the select: manualApplied remembers the bonus already
+    // added to each ability, so changing the background/+2/+1 picks only
+    // shifts the score by the difference instead of stacking.
+    let manualApplied = {};
+    applyManualBonus = () => {
+      for (const row of abilityRows) {
+        const next = getBgBonusFor(row.key);
+        const prev = manualApplied[row.key] || 0;
+        manualApplied[row.key] = next;
+        if (next === prev) continue;
+        const cur = Number(row.scoreInput.value);
+        if (isNaN(cur) || row.scoreInput.value === "") continue;
+        row.scoreInput.value = String(Math.max(0, Math.min(20, cur + next - prev)));
+        row.scoreInput.dispatchEvent(new Event("change"));
+      }
+    };
+    let prevMethod = methodSelect.value;
     const updateMethodVisibility = () => {
       standardArrayContainer.style.display = methodSelect.value.startsWith("Standard Array") ? "" : "none";
       pointBuyContainer.style.display = methodSelect.value.startsWith("Point Buy") ? "" : "none";
-      // Manual score entry stays exactly as it's always been, including
-      // while a background ability bonus is selected (see the "Background
-      // auto-fill" block below) - applying that bonus on top of a
-      // freeform, already-typed score has no reliable "before the bonus"
-      // value to compute from, so Manual mode deliberately leaves the
-      // ability score selects alone; add the bonus by hand.
       const manual = methodSelect.value === "Manual";
       for (const r of abilityRows) r.scoreInput.disabled = !manual;
+      if (manual && prevMethod !== "Manual") {
+        // Coming back from Standard Array/Point Buy: the scores already
+        // include the current bonus, so record it as applied.
+        manualApplied = {};
+        for (const row of abilityRows) manualApplied[row.key] = getBgBonusFor(row.key);
+      }
+      prevMethod = methodSelect.value;
       if (methodSelect.value.startsWith("Standard Array")) applyStandardArray();
       else if (methodSelect.value.startsWith("Point Buy")) recalcPointBuy();
     };
@@ -12785,7 +12859,12 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
 
       const raceData = RACE_SPEED_DATA[raceSelect.value] || { speed: 30, movement: "Walking" };
       const initiative = dexMod >= 0 ? `+${dexMod}` : `${dexMod}`;
-      const speedText = `${raceData.speed} ft.`;
+      // Wood Elf lineage: +5 ft. Walking speed (applyWoodElfSpeed sees the
+      // bonus is already included once the character is created).
+      const woodElf = raceSubChoiceSelect._traitName &&
+        raceSubChoiceSelect._traitName.trim().toLowerCase() === "elven lineage" &&
+        raceSubChoiceSelect.value === "Wood Elf";
+      const speedText = `${raceData.speed + (woodElf ? 5 : 0)} ft.`;
 
       acValueSpan.textContent = String(ac);
       acInput.value = String(ac);
@@ -12802,6 +12881,7 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
       if (row) row.scoreInput.addEventListener("change", recalcCombatValues);
     }
     raceSelect.addEventListener("change", recalcCombatValues);
+    raceSubChoiceSelect.addEventListener("change", recalcCombatValues);
     classSelect.addEventListener("change", recalcCombatValues);
     secondaryClassSelect.addEventListener("change", recalcCombatValues);
     multiclassCheckbox.addEventListener("change", recalcCombatValues);
@@ -13086,6 +13166,9 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
       const data = getBackgroundData(bg);
       if (!data) {
         bonusRefs = null;
+        // Switching to Custom/no background must also take the previous
+        // background's bonus back off the scores.
+        reapplyBgBonus();
         return;
       }
       backgroundBonusContainer.createEl("div", { cls: "stat-subheader", text: `${bg} Ability Bonus` });
@@ -13119,12 +13202,7 @@ function buildCharSheetFields(app, leftCol, rightCol, page, isCreate) {
         }
       }
       plus1Select.value = data.abilities[1];
-      const reapplyCurrentMethod = () => {
-        if (methodSelect.value.startsWith("Standard Array")) applyStandardArray();
-        else if (methodSelect.value.startsWith("Point Buy")) recalcPointBuy();
-        // Manual mode intentionally doesn't auto-apply - see
-        // updateMethodVisibility's own comment above.
-      };
+      const reapplyCurrentMethod = reapplyBgBonus;
       const updatePlus1Options = () => {
         // +1 must land on a different ability than +2.
         for (const opt of Array.from(plus1Select.options)) opt.disabled = opt.value === plus2Select.value;
@@ -19895,6 +19973,481 @@ function buildAtlasCharacterNote(app, mainFile, prevFm) {
   );
 }
 
+// ===================================================================
+// Compact character card (`onednd-compact` code block, v1.10.0)
+// The same compact layout the "One DnD Character (Compact)" Atlas VTT
+// template gives character tokens (header line, AC/Initiative/Speed,
+// ability table, then Actions / Spells / Skills / Features / Inventory /
+// Defenses / Background tabs) - but drawn by this plugin itself, so it
+// works without Atlas installed (and on mobile, where Atlas isn't
+// available). Data comes from buildAtlasCharacterFrontmatter, the exact
+// same builder the Atlas sync uses, so both always show the same thing.
+// Counters (spell slots, uses, death saves, inspiration) are clickable and
+// write straight back to the character sheet through applyAtlasCounters -
+// the same Atlas -> sheet path an Atlas pip click takes.
+//
+// Usage: ```onednd-compact``` inside a character note shows that
+// character; elsewhere, put the character's link inside the block
+// (`[[Name]]` or `character: [[Name]]`). A path inside the character data
+// folder (e.g. the "(Atlas)" note) is mapped back to its character.
+// Roll for Initiative renders this block in its statblock pane for player
+// characters.
+// ===================================================================
+const COMPACT_CARD_BLOCK = "onednd-compact";
+const COMPACT_ABILITY_KEYS = ["str", "dex", "con", "int", "wis", "cha"];
+const COMPACT_TABS = ["Actions", "Spells", "Skills", "Features", "Inventory", "Defenses", "Background"];
+const COMPACT_SPELL_TABS = ["Cantrips", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th"];
+const COMPACT_SKILL_ABILITY = {
+  acrobatics: "Dex", "animal handling": "Wis", arcana: "Int", athletics: "Str", deception: "Cha", history: "Int",
+  insight: "Wis", intimidation: "Cha", investigation: "Int", medicine: "Wis", nature: "Int", perception: "Wis",
+  performance: "Cha", persuasion: "Cha", religion: "Int", "sleight of hand": "Dex", stealth: "Dex", survival: "Wis",
+};
+// Atlas' own "Combat & Defense" metric keeps more than 6 pips as a
+// "left / max" stepper (e.g. a Lay on Hands pool); same threshold here.
+const COMPACT_MAX_BOXES = 6;
+
+function compactSigned(n) {
+  const v = Number(n);
+  if (isNaN(v)) return String(n ?? "");
+  return v >= 0 ? `+${v}` : `${v}`;
+}
+
+// Resolves which character a compact card is for (see the comment above).
+function resolveCompactCharacter(app, source, sourcePath) {
+  const text = String(source || "").trim();
+  let file = null;
+  if (text) {
+    const m = /\[\[([^\]|#]+)/.exec(text);
+    const target = m ? m[1] : text.replace(/^character\s*:\s*/i, "").trim();
+    if (target) file = app.metadataCache.getFirstLinkpathDest(target, sourcePath || "");
+  }
+  if (!file && sourcePath) file = app.vault.getAbstractFileByPath(sourcePath);
+  if (!(file instanceof TFile)) return null;
+  // A file inside the data folder (a companion or the "(Atlas)" note):
+  // map it back to the character whose data_id owns that folder.
+  const prefix = `${SHARED_FOLDER}/`;
+  if (file.path.startsWith(prefix)) {
+    const id = file.path.slice(prefix.length).split("/")[0];
+    if (id) {
+      for (const f of app.vault.getMarkdownFiles()) {
+        const fm = (app.metadataCache.getFileCache(f) || {}).frontmatter;
+        if (fm && fm.data_id === id && !f.path.startsWith(prefix)) return f;
+      }
+    }
+    return null;
+  }
+  return file;
+}
+
+class CompactCharacterCard extends MarkdownRenderChild {
+  constructor(containerEl, app, source, sourcePath) {
+    super(containerEl);
+    this.app = app;
+    this.source = source;
+    this.sourcePath = sourcePath;
+    this.tab = "Actions";
+    this.spellTab = null;
+    this.openEntries = new Set();
+    this.timer = null;
+    this.busy = false;
+  }
+
+  onload() {
+    this.containerEl.addClass("onednd-cc-host");
+    this.render();
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
+        if (!this.mainFile) return;
+        const id = getDataFolderId(this.app, this.mainFile);
+        const mine = file.path === this.mainFile.path || (id && file.path.startsWith(`${SHARED_FOLDER}/${id}/`) && !isAtlasCompanionName(file.name));
+        if (mine) this.schedule();
+      })
+    );
+    this.registerEvent(this.app.vault.on("rename", () => this.schedule()));
+  }
+
+  onunload() {
+    if (this.timer) clearTimeout(this.timer);
+  }
+
+  schedule() {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.render();
+    }, 250);
+  }
+
+  render() {
+    const el = this.containerEl;
+    el.empty();
+    // Fresh child component per render, so markdown rendered into entry
+    // descriptions is cleaned up instead of piling up on every refresh.
+    if (this.inner) this.removeChild(this.inner);
+    this.inner = new MarkdownRenderChild(el);
+    this.addChild(this.inner);
+    this.mainFile = resolveCompactCharacter(this.app, this.source, this.sourcePath);
+    const fm = this.mainFile ? (this.app.metadataCache.getFileCache(this.mainFile) || {}).frontmatter || {} : {};
+    if (!this.mainFile || !getDataFolderId(this.app, this.mainFile)) {
+      el.createDiv({ cls: "onednd-cc-empty", text: "This isn't a One DnD character sheet." });
+      return;
+    }
+    let d;
+    try {
+      d = buildAtlasCharacterFrontmatter(this.app, this.mainFile);
+    } catch (e) {
+      el.createDiv({ cls: "onednd-cc-empty", text: "Couldn't read this character sheet." });
+      return;
+    }
+    const abFm = (this.app.metadataCache.getFileCache(this.app.vault.getAbstractFileByPath(companionFilePath(this.app, this.mainFile, "Abilities"))) || {}).frontmatter || {};
+    this.data = d;
+    const card = el.createDiv({ cls: "onednd-cc" });
+    this.renderHeader(card, d, fm);
+    this.renderScores(card, d, abFm);
+    this.renderTabs(card, d, abFm);
+  }
+
+  // ---------- header ----------
+  renderHeader(card, d, fm) {
+    const head = card.createDiv({ cls: "onednd-cc-head" });
+    const cover = atlasText(fm.cover);
+    if (cover) {
+      const target = cover.replace(/^!?\[\[/, "").replace(/(\|.*)?\]\]$/, "");
+      const img = this.app.metadataCache.getFirstLinkpathDest(target, this.mainFile.path);
+      if (img instanceof TFile) head.createEl("img", { cls: "onednd-cc-portrait", attr: { src: this.app.vault.getResourcePath(img), alt: "" } });
+    }
+    const titles = head.createDiv({ cls: "onednd-cc-titles" });
+    const name = titles.createEl("a", { cls: "onednd-cc-name internal-link", text: d.name || this.mainFile.basename });
+    name.setAttr("data-href", this.mainFile.path);
+    name.setAttr("href", this.mainFile.path);
+    name.title = "Open character sheet";
+    name.onclick = (e) => {
+      e.preventDefault();
+      this.app.workspace.openLinkText(this.mainFile.path, this.sourcePath || "", true);
+    };
+    let line = `Level ${d.level || 1}`;
+    if (d.species) line += ` ${d.species}`;
+    if (d.class) line += ` ${d.class}`;
+    if (d.subclass) line += ` (${d.subclass})`;
+    titles.createDiv({ cls: "onednd-cc-line", text: line });
+
+    const metrics = card.createDiv({ cls: "onednd-cc-metrics" });
+    const metric = (label, value, cls) => {
+      const m = metrics.createDiv({ cls: `onednd-cc-metric ${cls || ""}` });
+      m.createDiv({ cls: "onednd-cc-metric-value", text: String(value) });
+      m.createDiv({ cls: "onednd-cc-metric-label", text: label });
+    };
+    metric("AC", d.ac ?? "—");
+    metric("Initiative", compactSigned(d.initiative ?? 0));
+    metric("Speed", `${d.speed ?? 30} ft.`);
+    const hpText = d.hp != null ? `${d.hp_current ?? d.hp}/${d.hp}${d.hp_temp ? ` +${d.hp_temp}` : ""}` : "—";
+    metric("HP", hpText, "is-hp");
+  }
+
+  // ---------- ability table ----------
+  renderScores(card, d, abFm) {
+    const wrap = card.createDiv({ cls: "onednd-cc-scores" });
+    const saveMod = (key) => {
+      const row = (abFm.saves_list || []).find((s) => s && String(s.ability || "").toLowerCase() === key);
+      return row ? { mod: atlasText(row.mod) || "+0", prof: !!row.prof } : null;
+    };
+    (d.stats || []).forEach((score, i) => {
+      const key = COMPACT_ABILITY_KEYS[i];
+      const mod = Math.floor((Number(score) - 10) / 2);
+      const sv = saveMod(key);
+      const cell = wrap.createDiv({ cls: "onednd-cc-score" });
+      cell.createDiv({ cls: "onednd-cc-score-key", text: key.toUpperCase() });
+      cell.createDiv({ cls: "onednd-cc-score-num", text: String(score) });
+      const mods = cell.createDiv({ cls: "onednd-cc-score-mods" });
+      mods.createSpan({ cls: "onednd-cc-score-mod", text: compactSigned(mod), attr: { title: "Modifier" } });
+      const s = mods.createSpan({ cls: `onednd-cc-score-save${sv && sv.prof ? " is-prof" : ""}`, text: sv ? sv.mod : compactSigned(mod) });
+      s.title = sv && sv.prof ? "Saving throw (proficient)" : "Saving throw";
+    });
+  }
+
+  // ---------- tabs ----------
+  renderTabs(card, d, abFm) {
+    const tabs = COMPACT_TABS.filter((t) => t !== "Spells" || d.spellcasting_ability || ATLAS_SPELL_LEVEL_FIELDS.some((f) => d[f]));
+    if (!tabs.includes(this.tab)) this.tab = tabs[0];
+    const strip = card.createDiv({ cls: "onednd-cc-tabstrip", attr: { role: "tablist" } });
+    const body = card.createDiv({ cls: "onednd-cc-body" });
+    for (const t of tabs) {
+      const b = strip.createEl("button", { cls: "onednd-cc-tab", text: t, attr: { role: "tab", "aria-selected": String(t === this.tab) } });
+      b.onclick = () => {
+        this.tab = t;
+        this.render();
+      };
+    }
+    const fn = {
+      Actions: () => this.tabActions(body, d),
+      Spells: () => this.tabSpells(body, d),
+      Skills: () => this.tabSkills(body, d, abFm),
+      Features: () => this.tabFeatures(body, d),
+      Inventory: () => this.tabInventory(body, d),
+      Defenses: () => this.tabDefenses(body, d),
+      Background: () => this.tabBackground(body, d),
+    }[this.tab];
+    if (fn) fn();
+  }
+
+  section(parent, heading) {
+    const sec = parent.createDiv({ cls: "onednd-cc-section" });
+    if (heading) sec.createDiv({ cls: "onednd-cc-heading", text: heading });
+    return sec;
+  }
+
+  runIn(parent, label, value) {
+    const v = atlasText(value);
+    if (!v) return;
+    const p = parent.createDiv({ cls: "onednd-cc-runin" });
+    p.createSpan({ cls: "onednd-cc-runin-label", text: `${label}. ` });
+    p.appendText(v);
+  }
+
+  // Renders "[[path|Name]]" as an internal link (hover preview + click),
+  // anything else as plain text.
+  nameEl(parent, raw) {
+    const s = atlasText(raw);
+    const m = /^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/.exec(s);
+    if (!m) return parent.createSpan({ cls: "onednd-cc-entry-name", text: s });
+    const a = parent.createEl("a", { cls: "onednd-cc-entry-name internal-link", text: m[2] || m[1].split("/").pop() });
+    a.setAttr("data-href", m[1]);
+    a.setAttr("href", m[1]);
+    a.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.app.workspace.openLinkText(m[1], this.mainFile.path, e.ctrlKey || e.metaKey);
+    };
+    return a;
+  }
+
+  // Atlas-style entries: bold name + small extras line, description below.
+  // Long descriptions fold away (click the name row) so the pane stays
+  // compact; actions open by default.
+  entries(parent, list, opts) {
+    const o = opts || {};
+    if (!Array.isArray(list) || !list.length) {
+      if (o.empty) parent.createDiv({ cls: "onednd-cc-muted", text: o.empty });
+      return;
+    }
+    for (const e of list) {
+      if (!e) continue;
+      const key = `${o.group || ""}:${atlasText(e.name)}`;
+      const item = parent.createDiv({ cls: "onednd-cc-entry" });
+      const top = item.createDiv({ cls: "onednd-cc-entry-top" });
+      this.nameEl(top, e.name);
+      const extras = [];
+      for (const [k, label] of o.extras || []) if (atlasText(e[k])) extras.push(label ? `${label} ${atlasText(e[k])}` : atlasText(e[k]));
+      if (extras.length) top.createSpan({ cls: "onednd-cc-entry-extras", text: extras.join(" · ") });
+      const desc = o.noDesc ? "" : atlasText(e.desc);
+      if (!desc) continue;
+      const open = o.openByDefault ? !this.openEntries.has(`closed:${key}`) : this.openEntries.has(key);
+      item.addClass("has-desc");
+      if (open) item.addClass("is-open");
+      const descEl = item.createDiv({ cls: "onednd-cc-entry-desc" });
+      if (open) MarkdownRenderer.render(this.app, desc, descEl, this.mainFile.path, this.inner || this);
+      top.onclick = () => {
+        if (o.openByDefault) {
+          if (this.openEntries.has(`closed:${key}`)) this.openEntries.delete(`closed:${key}`);
+          else this.openEntries.add(`closed:${key}`);
+        } else if (this.openEntries.has(key)) this.openEntries.delete(key);
+        else this.openEntries.add(key);
+        this.render();
+      };
+    }
+  }
+
+  // Clickable counter rows - ticked box = used, like the sheet's own
+  // checkboxes. Clicking box N ticks 1..N; clicking a ticked box clears
+  // from there. Big pools get a - / + stepper instead.
+  counters(parent, field, label) {
+    const rows = (Array.isArray(this.data[field]) ? this.data[field] : []).filter((r) => r && Number(r.max) > 0);
+    if (!rows.length) return;
+    const wrap = parent.createDiv({ cls: "onednd-cc-counters" });
+    if (label) wrap.createDiv({ cls: "onednd-cc-subheading", text: label });
+    rows.forEach((row, idx) => {
+      const max = Number(row.max) || 0;
+      const used = Math.max(0, Math.min(max, Number(row.used) || 0));
+      const line = wrap.createDiv({ cls: "onednd-cc-counter" });
+      line.createSpan({ cls: "onednd-cc-counter-name", text: atlasText(row.name) });
+      const boxes = line.createSpan({ cls: "onednd-cc-boxes" });
+      if (max > COMPACT_MAX_BOXES) {
+        const minus = boxes.createEl("button", { cls: "onednd-cc-step", text: "−", attr: { "aria-label": "Use one" } });
+        boxes.createSpan({ cls: "onednd-cc-step-value", text: `${max - used} / ${max} left` });
+        const plus = boxes.createEl("button", { cls: "onednd-cc-step", text: "+", attr: { "aria-label": "Regain one" } });
+        minus.onclick = () => this.setUsed(field, idx, Math.min(max, used + 1));
+        plus.onclick = () => this.setUsed(field, idx, Math.max(0, used - 1));
+        return;
+      }
+      for (let i = 1; i <= max; i++) {
+        const box = boxes.createEl("button", { cls: `onednd-cc-box${i <= used ? " is-used" : ""}`, attr: { "aria-label": `${atlasText(row.name)} ${i}` } });
+        box.onclick = () => this.setUsed(field, idx, i <= used ? i - 1 : i);
+      }
+    });
+  }
+
+  async setUsed(field, idx, used) {
+    if (this.busy) return;
+    const rows = (this.data[field] || []).filter((r) => r && Number(r.max) > 0).map((r) => Object.assign({}, r));
+    if (!rows[idx]) return;
+    rows[idx].used = used;
+    this.busy = true;
+    try {
+      // Same write-back an Atlas pip click goes through (see
+      // AtlasCharacterSync.applyAtlasCounters) - it only needs `app`.
+      await AtlasCharacterSync.prototype.applyAtlasCounters.call({ app: this.app }, this.mainFile, { [field]: rows });
+    } catch (e) {
+      new Notice("Couldn't update the character sheet.");
+    } finally {
+      this.busy = false;
+    }
+    this.schedule();
+  }
+
+  tabActions(body, d) {
+    const groups = [
+      ["Actions", "actions", "action_uses", "Action Uses"],
+      ["Bonus Actions", "bonus_actions", "bonus_action_uses", "Bonus Action Uses"],
+      ["Reactions", "reactions", "reaction_uses", "Reaction Uses"],
+      ["Other", "otheractions", null, null],
+    ];
+    let any = false;
+    for (const [heading, field, usesField, usesLabel] of groups) {
+      if (!(d[field] || []).length) continue;
+      any = true;
+      const sec = this.section(body, heading);
+      this.entries(sec, d[field], {
+        group: field,
+        openByDefault: false,
+        extras: [["attack", ""], ["damage", ""], ["type", ""], ["range", ""], ["uses", "Uses"]],
+      });
+      if (usesField) this.counters(sec, usesField, usesLabel);
+    }
+    if (!any) body.createDiv({ cls: "onednd-cc-muted", text: "No actions yet." });
+  }
+
+  tabSpells(body, d) {
+    const top = this.section(body, "Spellcasting");
+    if (d.spellcasting_ability) {
+      const row = top.createDiv({ cls: "onednd-cc-metrics is-small" });
+      for (const [label, value] of [["Ability", d.spellcasting_ability], ["Save DC", d.spell_save_dc], ["Atk Bonus", compactSigned(d.spell_attack_bonus)]]) {
+        const m = row.createDiv({ cls: "onednd-cc-metric" });
+        m.createDiv({ cls: "onednd-cc-metric-value", text: String(value ?? "—") });
+        m.createDiv({ cls: "onednd-cc-metric-label", text: label });
+      }
+    }
+    this.counters(top, "slots", "Spell Slots");
+    const levels = ATLAS_SPELL_LEVEL_FIELDS.map((f, i) => ({ f, i })).filter(({ f }) => (d[f] || []).length);
+    if (!levels.length) {
+      body.createDiv({ cls: "onednd-cc-muted", text: "No spells yet." });
+      return;
+    }
+    if (!levels.some(({ f }) => f === this.spellTab)) this.spellTab = levels[0].f;
+    const strip = body.createDiv({ cls: "onednd-cc-tabstrip is-sub" });
+    for (const { f, i } of levels) {
+      const b = strip.createEl("button", { cls: "onednd-cc-tab", text: COMPACT_SPELL_TABS[i], attr: { "aria-selected": String(f === this.spellTab) } });
+      b.onclick = () => {
+        this.spellTab = f;
+        this.render();
+      };
+    }
+    this.entries(body, d[this.spellTab], { group: this.spellTab, extras: [["cost", ""], ["range", ""], ["duration", ""], ["type", ""], ["effect", ""]] });
+  }
+
+  tabSkills(body, d, abFm) {
+    const sec = this.section(body, "Skills");
+    const list = (abFm.skills_list || []).filter((s) => s && s.name);
+    for (const sk of list) {
+      const row = sec.createDiv({ cls: "onednd-cc-skill" });
+      const mark = sk.expertise ? "◉" : sk.prof ? "●" : sk.half ? "◐" : "○";
+      row.createSpan({ cls: `onednd-cc-skill-dot${sk.expertise || sk.prof ? " is-prof" : ""}`, text: mark });
+      const ab = atlasText(sk.ability) || COMPACT_SKILL_ABILITY[String(sk.name).toLowerCase()] || "";
+      row.createSpan({ cls: "onednd-cc-skill-name", text: `${sk.name}${ab ? ` (${ab.charAt(0).toUpperCase()}${ab.slice(1, 3).toLowerCase()})` : ""}` });
+      row.createSpan({ cls: "onednd-cc-skill-mod", text: atlasText(sk.mod) || "+0" });
+    }
+    const passive = this.section(body, "Passive Senses");
+    const row = passive.createDiv({ cls: "onednd-cc-metrics is-small" });
+    for (const [label, key] of [["Perception", "passive_perception"], ["Investigation", "passive_investigation"], ["Insight", "passive_insight"]]) {
+      if (d[key] == null) continue;
+      const m = row.createDiv({ cls: "onednd-cc-metric" });
+      m.createDiv({ cls: "onednd-cc-metric-value", text: String(d[key]) });
+      m.createDiv({ cls: "onednd-cc-metric-label", text: label });
+    }
+    const special = String(d.senses || "").split(", ").filter((s) => s && !/^Passive /.test(s)).join(", ");
+    this.runIn(passive, "Senses", special);
+    this.runIn(passive, "Languages", d.languages || "Common");
+  }
+
+  tabFeatures(body, d) {
+    const groups = [
+      ["Class Features", "class_features", "class_feature_uses", "Class Feature Uses"],
+      ["Species Traits", "species_traits", "species_trait_uses", "Species Trait Uses"],
+      ["Feats", "feats", "feat_uses", "Feat Uses"],
+    ];
+    let any = false;
+    for (const [heading, field, usesField, usesLabel] of groups) {
+      if (!(d[field] || []).length) continue;
+      any = true;
+      const sec = this.section(body, heading);
+      this.counters(sec, usesField, usesLabel);
+      this.entries(sec, d[field], { group: field, extras: [["uses", "Uses"]] });
+    }
+    if (!any) body.createDiv({ cls: "onednd-cc-muted", text: "No features yet." });
+  }
+
+  tabInventory(body, d) {
+    if (Array.isArray(d.currency)) {
+      const row = body.createDiv({ cls: "onednd-cc-metrics is-small is-currency" });
+      ["CP", "SP", "EP", "GP", "PP"].forEach((label, i) => {
+        const m = row.createDiv({ cls: "onednd-cc-metric" });
+        m.createDiv({ cls: "onednd-cc-metric-value", text: String(d.currency[i] ?? 0) });
+        m.createDiv({ cls: "onednd-cc-metric-label", text: label });
+      });
+    }
+    const sec = this.section(body, "Equipment");
+    this.entries(sec, d.equipment, { group: "equipment", empty: "No items yet.", extras: [["desc", ""]], noDesc: true });
+  }
+
+  tabDefenses(body, d) {
+    const sec = this.section(body, null);
+    this.runIn(sec, "Proficiency Bonus", compactSigned(d.pb));
+    this.runIn(sec, "Hit Point Dice", d.hit_dice);
+    const saves = sec.createDiv({ cls: "onednd-cc-row" });
+    this.counters(saves, "death_save_success", "Death Saves (Success)");
+    this.counters(saves, "death_save_failure", "Death Saves (Failure)");
+    this.counters(sec, "heroic_inspiration", "Heroic Inspiration");
+    const def = this.section(body, null);
+    def.addClass("has-divider");
+    this.runIn(def, "Resistances", d.damage_resistances);
+    this.runIn(def, "Immunities", [d.damage_immunities, d.condition_immunities].filter(Boolean).join("; "));
+    this.runIn(def, "Vulnerabilities", d.damage_vulnerabilities);
+    const prof = this.section(body, null);
+    prof.addClass("has-divider");
+    this.runIn(prof, "Armor Training", d.armor_training);
+    this.runIn(prof, "Weapon Proficiencies", d.weapon_proficiencies);
+    this.runIn(prof, "Tool Proficiencies", d.tool_proficiencies);
+  }
+
+  tabBackground(body, d) {
+    const sec = this.section(body, null);
+    const line = [d.size, d.background, d.alignment].filter(Boolean).join(" · ");
+    if (line) sec.createDiv({ cls: "onednd-cc-line", text: line });
+    const grid = sec.createDiv({ cls: "onednd-cc-grid" });
+    for (const k of ["age", "height", "weight", "eyes", "hair", "skin"]) {
+      if (!atlasText(d[k])) continue;
+      const c = grid.createDiv();
+      c.createSpan({ cls: "onednd-cc-runin-label", text: `${k.charAt(0).toUpperCase()}${k.slice(1)}. ` });
+      c.appendText(atlasText(d[k]));
+    }
+    this.runIn(sec, "Appearance", d.appearance);
+    this.runIn(sec, "Personality", d.personality);
+    if (atlasText(d.notes)) {
+      const n = sec.createDiv({ cls: "onednd-cc-notes" });
+      for (const l of atlasText(d.notes).split("\n")) n.createDiv({ text: l });
+    }
+  }
+}
+
 class AtlasCharacterSync {
   constructor(plugin) {
     this.plugin = plugin;
@@ -20613,6 +21166,11 @@ module.exports = class Dnd2024CharacterSheetPlugin extends Plugin {
       if (!mainFile) return;
       const child = new CreaturesTracker(el, this.app, mainFile);
       ctx.addChild(child);
+    });
+    // Compact character card - see CompactCharacterCard. Roll for
+    // Initiative shows this in its statblock pane for player characters.
+    this.registerMarkdownCodeBlockProcessor(COMPACT_CARD_BLOCK, (source, el, ctx) => {
+      ctx.addChild(new CompactCharacterCard(el, this.app, source, ctx.sourcePath));
     });
     this.registerMarkdownCodeBlockProcessor("character-tracker", (source, el, ctx) => {
       const mainFile = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
