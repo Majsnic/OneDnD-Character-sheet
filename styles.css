@@ -4204,3 +4204,14 @@
   margin-top: 4px;
   white-space: pre-wrap;
 }
+
+/* Formula-driven feature uses (v1.10.1): the "= PB" / "= CHA mod" badge
+   next to a feature's Uses boxes, and the rule picker in Add/Edit Feature. */
+.dnd-sheet .feature-formula-badge {
+  opacity: 0.75;
+  font-style: italic;
+}
+.uses-formula-select {
+  max-width: 13em;
+  margin-right: 6px;
+}

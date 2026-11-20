@@ -22,6 +22,7 @@ A full walkthrough — installing the plugin (and its one required dependency), 
 - D&D Beyond character importer (Settings tab).
 - PDF export, built around the official 2014-style character sheet PDF layout.
 - Level-up flow wired to Ability Score Improvement / Feat choices.
+- **New in 1.10.1 — Uses that follow your character:** a feature's Max Uses can be a fixed number or follow your Proficiency Bonus, an ability modifier (e.g. Charisma, minimum 1), your level, or level × N. It updates by itself when you level up or change ability scores. Lucky (PB), Bardic Inspiration (CHA mod, Short Rest from Bard 5), Favored Enemy, Breath Weapon, Healing Hands and Lay on Hands do this automatically.
 - **New in 1.9.0 — Atlas VTT support:** characters show up in [Atlas VTT](https://community.obsidian.md/plugins/atlas-vtt) as statblocks, with a compact tabbed layout and clickable slot/uses/death-save boxes that sync back to the sheet. See below.
 - **New in 1.9.0 — Unused character data cleanup:** finds data folders no character uses any more and moves them to a `_Deleted` folder.
 
