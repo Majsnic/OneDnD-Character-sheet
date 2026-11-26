@@ -22,6 +22,7 @@ A full walkthrough — installing the plugin (and its one required dependency), 
 - D&D Beyond character importer (Settings tab).
 - PDF export, built around the official 2014-style character sheet PDF layout.
 - Level-up flow wired to Ability Score Improvement / Feat choices.
+- **New in 1.10.2 — Spells in Atlas VTT:** each spell is one line in the Spells tab's own order (Time · Range · Hit/DC · Effect), and upcastable spells also show at every higher level you have slots for, with the upcast effect worked out and marked ↑.
 - **New in 1.10.1 — Uses that follow your character:** a feature's Max Uses can be a fixed number or follow your Proficiency Bonus, an ability modifier (e.g. Charisma, minimum 1), your level, or level × N. It updates by itself when you level up or change ability scores. Lucky (PB), Bardic Inspiration (CHA mod, Short Rest from Bard 5), Favored Enemy, Breath Weapon, Healing Hands and Lay on Hands do this automatically.
 - **New in 1.9.0 — Atlas VTT support:** characters show up in [Atlas VTT](https://community.obsidian.md/plugins/atlas-vtt) as statblocks, with a compact tabbed layout and clickable slot/uses/death-save boxes that sync back to the sheet. See below.
 - **New in 1.9.0 — Unused character data cleanup:** finds data folders no character uses any more and moves them to a `_Deleted` folder.
@@ -118,6 +119,7 @@ If the [Atlas VTT](https://community.obsidian.md/plugins/atlas-vtt) plugin is in
 
 - The copy updates automatically whenever the sheet changes. Edit the sheet, not the copy.
 - It uses its own compact, one-column template, "One DnD Character (Compact)", written to `atlas-vtt/statblock-templates/`. Ability scores, AC, initiative and speed are always visible. Everything else sits in tabs: Actions, Spells, Skills, Features, Inventory, Defenses, Background.
+- Spells in the Spells tab read like the sheet's Spells tab: name, then Time · Range · Hit/DC · Effect (1A, 1BA and 1R for action, bonus action and reaction; a dash when a spell has no attack or save). A spell you can upcast also appears, marked ↑, under each higher level you have slots for, with the effect for that level.
 - Spell slots, limited uses, death saves and Heroic Inspiration show as checkboxes. To make them clickable, turn on **Statblock editor** in Atlas: press Space on a map → "Experimental features". Ticking a box in Atlas updates the character sheet. Atlas' Short rest and Long rest buttons work too.
 - Settings → Atlas VTT has a switch to turn this off, and a "Sync now" button. There's also a command, "Sync all characters to Atlas VTT".
 - Limits: spent hit dice exist only in Atlas, because the sheet doesn't track them. A Warlock multiclassed with another spellcaster keeps pact and regular slots apart, so Atlas slot clicks don't reach the sheet for those characters.
